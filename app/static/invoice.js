@@ -447,6 +447,16 @@ class InvoiceMaker {
     let y = 30;
     const pad = 24;
 
+    const truncate = (text, maxW) => {
+      if (!text) return "";
+      if (ctx.measureText(text).width <= maxW) return text;
+      let s = String(text);
+      while (s.length > 0 && ctx.measureText(s + "...").width > maxW) {
+        s = s.slice(0, -1);
+      }
+      return s + "...";
+    };
+
     const drawDashedLine = (currY) => {
       ctx.save();
       ctx.setLineDash([4, 4]);
@@ -504,8 +514,8 @@ class InvoiceMaker {
 
     drawMetaRow(t("invoiceNumber") + ":", invoice.invoice_number);
     drawMetaRow(t("issueDate") + ":", invoice.issue_date);
-    drawMetaRow(t("customer") + ":", invoice.customer_name);
-    if (invoice.customer_phone) drawMetaRow(t("phone") + ":", invoice.customer_phone);
+    drawMetaRow(t("customer") + ":", truncate(invoice.customer_name, 230));
+    if (invoice.customer_phone) drawMetaRow(t("phone") + ":", truncate(invoice.customer_phone, 200));
 
     y += 4;
     drawDashedLine(y);
@@ -517,12 +527,13 @@ class InvoiceMaker {
       ctx.font = "bold 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
 
       // Item Name
+      const itemTitle = truncate(item.description, 390);
       if (!isAr) {
         ctx.textAlign = "left";
-        ctx.fillText(item.description, pad, y);
+        ctx.fillText(itemTitle, pad, y);
       } else {
         ctx.textAlign = "right";
-        ctx.fillText(item.description, width - pad, y);
+        ctx.fillText(itemTitle, width - pad, y);
       }
       y += 16;
 

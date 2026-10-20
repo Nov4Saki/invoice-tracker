@@ -192,7 +192,11 @@ class MiniChartEngine {
       ctx.lineTo(width - padding.right, y);
       ctx.stroke();
 
-      const valLabel = val >= 1000 ? (val / 1000).toFixed(1) + "k" : Math.round(val);
+      let valLabel;
+      if (val >= 1e9) valLabel = (val / 1e9).toFixed(1) + "B";
+      else if (val >= 1e6) valLabel = (val / 1e6).toFixed(1) + "M";
+      else if (val >= 1e3) valLabel = (val / 1e3).toFixed(1) + "k";
+      else valLabel = Math.round(val);
       ctx.fillText(valLabel, padding.left - 8, y);
     }
 

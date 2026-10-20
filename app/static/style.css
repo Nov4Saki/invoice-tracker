@@ -625,9 +625,14 @@ body {
 }
 
 .metric-card-value {
-  font-size: 24px;
+  font-size: clamp(17px, 1.6vw, 24px);
   font-weight: 800;
   letter-spacing: -0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
 }
 
 .metric-card-sub {
@@ -906,6 +911,10 @@ body {
   unicode-bidi: plaintext;
   display: inline-block;
   vertical-align: middle;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 select, option {
@@ -1233,8 +1242,23 @@ select, option {
 .total-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 12px;
   font-size: 13px;
   padding: 2px 0;
+}
+
+.total-row span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.total-row span:last-child {
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .total-row.grand-total {
