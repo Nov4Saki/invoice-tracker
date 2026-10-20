@@ -1,6 +1,36 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-data/app_profile/
-data/api_test.db
+*.py[cod]
+*$py.class
+
+# PyInstaller / Build artifacts
+build/
+dist/
+release/
+*.manifest
+*.spec
+
+# User Data, SQLite Databases & Local Profiles
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment & Virtual Environments
+.venv/
+env/
+venv/
+ENV/
+.env
+
+# Editor & OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
+.tmp/

@@ -16,12 +16,21 @@ class MiniChartEngine {
     const dpr = window.devicePixelRatio || 1;
 
     // Resize canvas to match display dimensions crisply
+    const parent = canvas.parentElement;
+    const parentWidth = parent ? parent.clientWidth : 0;
+    const parentHeight = parent ? parent.clientHeight : 0;
     const rect = canvas.getBoundingClientRect();
-    const width = rect.width || 320;
-    const height = rect.height || 260;
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
+    const width = parentWidth > 0 ? parentWidth : (rect.width > 0 ? rect.width : 320);
+    const height = parentHeight > 0 ? parentHeight : (rect.height > 0 ? rect.height : 260);
+
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, width, height);
 
     const total = data.reduce((sum, item) => sum + (Number(item.value) || 0), 0);
     const centerX = width / 2;
@@ -29,14 +38,14 @@ class MiniChartEngine {
     const outerRadius = Math.min(centerX, centerY) * 0.78;
     const innerRadius = outerRadius * 0.58;
 
-    ctx.clearRect(0, 0, width, height);
-
     if (total <= 0) {
       ctx.fillStyle = "#94A3B8";
-      ctx.font = "14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.font = "14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(t("noRecordsFound") || "No Data", centerX, centerY);
+      canvas.onmousemove = null;
+      canvas.onmouseleave = null;
       return;
     }
 
@@ -58,7 +67,7 @@ class MiniChartEngine {
 
       // Border between segments
       ctx.lineWidth = 2;
-      ctx.strokeStyle = options.isDark ? "#131D31" : "#FFFFFF";
+      ctx.strokeStyle = options.isDark ? "#131316" : "#FFFFFF";
       ctx.stroke();
 
       slices.push({
@@ -75,12 +84,12 @@ class MiniChartEngine {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
-    ctx.fillStyle = options.isDark ? "#94A3B8" : "#64748B";
-    ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.fillStyle = options.isDark ? "#A1A1AA" : "#64748B";
+    ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
     ctx.fillText(options.centerLabel || (t("totalAmount") || "Total"), centerX, centerY - 10);
 
-    ctx.fillStyle = options.isDark ? "#F8FAFC" : "#0F172A";
-    ctx.font = "bold 15px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.fillStyle = options.isLoss ? "#EF4444" : (options.isDark ? "#F4F4F5" : "#0F172A");
+    ctx.font = "bold 15px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
     const centerVal = options.centerValue !== undefined ? options.centerValue : formatCurrency(total);
     ctx.fillText(centerVal, centerX, centerY + 12);
 
@@ -119,28 +128,38 @@ class MiniChartEngine {
   }
 
   /**
-   * Render an interactive Multi-Series Financial Histogram (Revenue & Net Profit).
+   * Render an interactive Multi-Series Financial Histogram (Revenue & Net Profit / Loss).
+   * Accurately distinguishes profits (Emerald #10B981) from losses (Crimson #EF4444).
    */
   static renderHistogram(canvas, seriesData, options = {}) {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     const dpr = window.devicePixelRatio || 1;
 
+    const parent = canvas.parentElement;
+    const parentWidth = parent ? parent.clientWidth : 0;
+    const parentHeight = parent ? parent.clientHeight : 0;
     const rect = canvas.getBoundingClientRect();
-    const width = rect.width || 600;
-    const height = rect.height || 260;
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
-    ctx.scale(dpr, dpr);
+    const width = parentWidth > 0 ? parentWidth : (rect.width > 0 ? rect.width : 600);
+    const height = parentHeight > 0 ? parentHeight : (rect.height > 0 ? rect.height : 260);
 
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
 
     if (!seriesData || seriesData.length === 0) {
       ctx.fillStyle = "#94A3B8";
-      ctx.font = "14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.font = "14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(t("noRecordsFound") || "No Data", width / 2, height / 2);
+      canvas.onmousemove = null;
+      canvas.onmouseleave = null;
       return;
     }
 
@@ -150,7 +169,7 @@ class MiniChartEngine {
 
     // Find max value
     const maxVal = Math.max(
-      ...seriesData.map(d => Math.max(Number(d.revenue || 0), Number(d.profit || 0), 100))
+      ...seriesData.map(d => Math.max(Number(d.revenue || 0), Math.abs(Number(d.profit || 0)), 100))
     );
     // Round max to neat ceiling
     const roundedMax = Math.ceil(maxVal * 1.15);
@@ -159,8 +178,8 @@ class MiniChartEngine {
     const gridLines = 4;
     ctx.lineWidth = 1;
     ctx.strokeStyle = options.isDark ? "rgba(255, 255, 255, 0.07)" : "rgba(0, 0, 0, 0.06)";
-    ctx.fillStyle = options.isDark ? "#64748B" : "#94A3B8";
-    ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.fillStyle = options.isDark ? "#71717A" : "#94A3B8";
+    ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
 
@@ -189,10 +208,12 @@ class MiniChartEngine {
       const groupCenterX = padding.left + i * groupWidth + groupWidth / 2;
 
       const revVal = Math.max(0, Number(d.revenue || 0));
-      const profVal = Math.max(0, Number(d.profit || 0));
+      const rawProfit = Number(d.profit || 0);
+      const isLoss = rawProfit < 0;
+      const profMagnitude = Math.abs(rawProfit);
 
       const revHeight = (revVal / roundedMax) * chartHeight;
-      const profHeight = (profVal / roundedMax) * chartHeight;
+      const profHeight = (profMagnitude / roundedMax) * chartHeight;
 
       const revX = groupCenterX - barWidth - gap / 2;
       const revY = padding.top + chartHeight - revHeight;
@@ -200,25 +221,26 @@ class MiniChartEngine {
       const profX = groupCenterX + gap / 2;
       const profY = padding.top + chartHeight - profHeight;
 
-      // Draw Revenue Bar (Blue gradient or solid)
+      // Draw Revenue Bar (Blue)
       ctx.fillStyle = "#3B82F6";
       MiniChartEngine.roundRect(ctx, revX, revY, barWidth, revHeight, 3);
       ctx.fill();
 
-      // Draw Profit Bar (Emerald Green)
-      ctx.fillStyle = "#10B981";
+      // Draw Profit or Loss Bar (Emerald #10B981 if profit, Crimson #EF4444 if loss)
+      ctx.fillStyle = isLoss ? "#EF4444" : "#10B981";
       MiniChartEngine.roundRect(ctx, profX, profY, barWidth, profHeight, 3);
       ctx.fill();
 
       // X-Axis Month Label
-      ctx.fillStyle = options.isDark ? "#94A3B8" : "#475569";
+      ctx.fillStyle = options.isDark ? "#A1A1AA" : "#475569";
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
       ctx.fillText(d.month_label || "", groupCenterX, padding.top + chartHeight + 8);
 
       hitBoxes.push({
         data: d,
+        isLoss,
         x: padding.left + i * groupWidth,
         width: groupWidth,
         y: padding.top,
@@ -232,6 +254,120 @@ class MiniChartEngine {
       const mx = e.clientX - cRect.left;
       const my = e.clientY - cRect.top;
 
+      const hit = hitBoxes.find(h => mx >= h.x && mx <= (h.x + h.width) && my >= h.y && my <= (h.y + h.height));
+      if (hit && options.onHover) {
+        options.onHover(hit.data, e.clientX, e.clientY);
+      } else {
+        if (options.onLeave) options.onLeave();
+      }
+    };
+
+    canvas.onmouseleave = () => {
+      if (options.onLeave) options.onLeave();
+    };
+  }
+
+  /**
+   * Render an interactive Item-Level Profit/Loss Bar Chart for Invoices or Orders.
+   */
+  static renderItemBars(canvas, itemsData, options = {}) {
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+
+    const parent = canvas.parentElement;
+    const parentWidth = parent ? parent.clientWidth : 0;
+    const parentHeight = parent ? parent.clientHeight : 0;
+    const rect = canvas.getBoundingClientRect();
+    const width = parentWidth > 0 ? parentWidth : (rect.width > 0 ? rect.width : 540);
+    const height = parentHeight > 0 ? parentHeight : (rect.height > 0 ? rect.height : 220);
+
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, width, height);
+
+    if (!itemsData || itemsData.length === 0) {
+      ctx.fillStyle = "#94A3B8";
+      ctx.font = "14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(t("noRecordsFound") || "No Items", width / 2, height / 2);
+      canvas.onmousemove = null;
+      canvas.onmouseleave = null;
+      return;
+    }
+
+    const padding = { top: 20, right: 20, bottom: 35, left: 60 };
+    const chartWidth = width - padding.left - padding.right;
+    const chartHeight = height - padding.top - padding.bottom;
+
+    const maxVal = Math.max(
+      ...itemsData.map(it => Math.max(Number(it.revenue || 0), Math.abs(Number(it.profit || 0)), 50))
+    );
+    const roundedMax = Math.ceil(maxVal * 1.15);
+
+    const count = itemsData.length;
+    const groupWidth = chartWidth / count;
+    const barWidth = Math.min(20, (groupWidth * 0.35));
+    const gap = 3;
+
+    const hitBoxes = [];
+
+    itemsData.forEach((it, i) => {
+      const groupCenterX = padding.left + i * groupWidth + groupWidth / 2;
+
+      const revVal = Math.max(0, Number(it.revenue || 0));
+      const rawProfit = Number(it.profit || 0);
+      const isLoss = rawProfit < 0;
+      const profMagnitude = Math.abs(rawProfit);
+
+      const revHeight = Math.max(2, (revVal / roundedMax) * chartHeight);
+      const profHeight = Math.max(2, (profMagnitude / roundedMax) * chartHeight);
+
+      const revX = groupCenterX - barWidth - gap / 2;
+      const revY = padding.top + chartHeight - revHeight;
+
+      const profX = groupCenterX + gap / 2;
+      const profY = padding.top + chartHeight - profHeight;
+
+      // Revenue bar
+      ctx.fillStyle = "#3B82F6";
+      MiniChartEngine.roundRect(ctx, revX, revY, barWidth, revHeight, 3);
+      ctx.fill();
+
+      // Profit / Loss bar
+      ctx.fillStyle = isLoss ? "#EF4444" : "#10B981";
+      MiniChartEngine.roundRect(ctx, profX, profY, barWidth, profHeight, 3);
+      ctx.fill();
+
+      // Label below (truncate name)
+      ctx.fillStyle = options.isDark ? "#A1A1AA" : "#475569";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.font = "10px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
+      let label = it.name || "Item";
+      if (label.length > 10) label = label.substring(0, 9) + "...";
+      ctx.fillText(label, groupCenterX, padding.top + chartHeight + 6);
+
+      hitBoxes.push({
+        data: it,
+        isLoss,
+        x: padding.left + i * groupWidth,
+        width: groupWidth,
+        y: padding.top,
+        height: chartHeight
+      });
+    });
+
+    canvas.onmousemove = (e) => {
+      const cRect = canvas.getBoundingClientRect();
+      const mx = e.clientX - cRect.left;
+      const my = e.clientY - cRect.top;
       const hit = hitBoxes.find(h => mx >= h.x && mx <= (h.x + h.width) && my >= h.y && my <= (h.y + h.height));
       if (hit && options.onHover) {
         options.onHover(hit.data, e.clientX, e.clientY);

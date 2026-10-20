@@ -1,6 +1,10 @@
 @echo off
 title Invoice Tracker & Accounting
 cd /d "%~dp0"
+if exist "dist\InvoiceTracker.exe" (
+    start "" "dist\InvoiceTracker.exe"
+    exit /b 0
+)
 python main.py
 if %ERRORLEVEL% NEQ 0 (
     echo.

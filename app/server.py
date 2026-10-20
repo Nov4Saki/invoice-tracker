@@ -9,11 +9,75 @@ import mimetypes
 import os
 import sqlite3
 import sys
+import threading
 import urllib.parse
 from datetime import datetime
+import time
 from app.db import get_db_connection, init_db
 
-STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+def get_static_dir():
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+        for cand in [os.path.join(meipass, "app", "static"), os.path.join(meipass, "static")]:
+            if os.path.isdir(cand):
+                return cand
+        return os.path.join(meipass, "app", "static")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+
+STATIC_DIR = get_static_dir()
+
+
+class ServerState:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.last_heartbeat = time.time()
+        self.heartbeat_received = False
+        self.client_closed = False
+        self.active_tabs = {}  # tab_id -> timestamp
+        self.empty_since = None
+
+    def record_heartbeat(self, tab_id=None, closing=False):
+        with self.lock:
+            now = time.time()
+            self.last_heartbeat = now
+            self.heartbeat_received = True
+
+            key = tab_id or "default"
+            if closing:
+                self.client_closed = True
+                self.active_tabs.pop(key, None)
+                if not self.active_tabs and self.empty_since is None:
+                    self.empty_since = now
+            else:
+                self.client_closed = False
+                self.active_tabs[key] = now
+                self.empty_since = None
+
+    def should_keep_running(self, heartbeat_timeout=15.0, close_grace=4.0):
+        with self.lock:
+            now = time.time()
+            if not self.heartbeat_received:
+                return True
+
+            # Prune stale tabs
+            stale = [t for t, ts in self.active_tabs.items() if (now - ts) > heartbeat_timeout]
+            for t in stale:
+                del self.active_tabs[t]
+
+            if not self.active_tabs:
+                if self.empty_since is None:
+                    self.empty_since = now
+                if (now - self.empty_since) >= close_grace:
+                    return False
+                return True
+            else:
+                self.empty_since = None
+                return True
+
+
+server_state = ServerState()
 
 
 def dict_from_row(row):
@@ -77,9 +141,10 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
         body = self.read_json_body()
         try:
-            self.handle_api_post(path, body)
+            self.handle_api_post(path, body, query)
         except Exception as e:
             self.send_error_json(str(e), 500)
 
@@ -134,6 +199,13 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
     # ========================== API GET ==========================
 
     def handle_api_get(self, path, query):
+        if path == "/api/heartbeat":
+            tab_id = query.get("tab_id", [None])[0]
+            closing = query.get("closing", [None])[0] in ("1", "true")
+            server_state.record_heartbeat(tab_id=tab_id, closing=closing)
+            self.send_json({"success": True, "status": "alive"})
+            return
+
         conn = get_db_connection()
         try:
             if path == "/api/stats":
@@ -231,11 +303,17 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
         hist_rows = conn.execute(hist_sql, params).fetchall()
         histogram = [dict_from_row(r) for r in hist_rows]
 
-        # Pie Chart: Profit vs Cost
-        pie_profit_cost = [
-            {"label": "Net Profit", "label_ar": "صافي الربح", "value": max(0.0, total_profit), "color": "#10B981"},
-            {"label": "Cost of Goods", "label_ar": "تكلفة البضاعة", "value": max(0.0, total_cost), "color": "#3B82F6"}
-        ]
+        # Pie Chart: Profit vs Cost (handling losses when total_profit < 0)
+        if total_profit < 0:
+            pie_profit_cost = [
+                {"label": "Net Loss", "label_ar": "صافي الخسارة", "value": round(abs(total_profit), 2), "color": "#EF4444"},
+                {"label": "Revenue", "label_ar": "المبيعات المحققة", "value": round(max(0.0, total_rev), 2), "color": "#3B82F6"}
+            ]
+        else:
+            pie_profit_cost = [
+                {"label": "Net Profit", "label_ar": "صافي الربح", "value": round(total_profit, 2), "color": "#10B981"},
+                {"label": "Cost of Goods", "label_ar": "تكلفة البضاعة", "value": round(max(0.0, total_cost), 2), "color": "#3B82F6"}
+            ]
 
         # Top Customers share
         top_cust_rows = conn.execute("""
@@ -267,6 +345,7 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
                 "total_revenue": total_rev,
                 "total_cost": total_cost,
                 "total_profit": total_profit,
+                "is_loss": total_profit < 0,
                 "margin_pct": margin_pct,
                 "total_paid": summary["total_paid"],
                 "total_unpaid": summary["total_unpaid"],
@@ -297,7 +376,7 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
             params.append(query["customer_id"][0])
 
         if "future_only" in query and query["future_only"][0] == "true":
-            where.append("i.issue_date > date('now')")
+            where.append("(i.issue_date > date('now') OR (i.due_date > date('now') AND i.status NOT IN ('paid', 'cancelled')))")
 
         sql = f"""
             SELECT
@@ -357,7 +436,57 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
             ORDER BY ii.id ASC
         """, (inv_id,)).fetchall()
 
-        inv_dict["items"] = [dict_from_row(it) for it in items]
+        item_rows = []
+        for it in items:
+            d = dict_from_row(it)
+            d["margin_pct"] = round((d["profit"] / d["total"] * 100), 1) if d["total"] > 0 else 0.0
+            d["is_loss"] = d["profit"] < 0
+            item_rows.append(d)
+
+        inv_dict["items"] = item_rows
+
+        # Calculate rich analytics & dashboard data for this invoice
+        net_profit = inv_dict.get("net_profit", 0.0)
+        cost_total = inv_dict.get("cost_total", 0.0)
+        total_amt = inv_dict.get("total_amount", 0.0)
+        subtotal = inv_dict.get("subtotal", 0.0)
+        tax_amt = inv_dict.get("tax_amount", 0.0)
+        shipping = inv_dict.get("shipping_fee", 0.0)
+        margin_pct = round((net_profit / total_amt * 100), 1) if total_amt > 0 else 0.0
+
+        if net_profit < 0:
+            inv_pie = [
+                {"label": "Net Loss", "label_ar": "صافي الخسارة", "value": round(abs(net_profit), 2), "color": "#EF4444"},
+                {"label": "Revenue", "label_ar": "المبيعات المحققة", "value": round(max(0.0, total_amt), 2), "color": "#3B82F6"}
+            ]
+        else:
+            inv_pie = [
+                {"label": "Net Profit", "label_ar": "صافي الربح", "value": round(net_profit, 2), "color": "#10B981"},
+                {"label": "Cost of Goods", "label_ar": "تكلفة البضاعة", "value": round(max(0.0, cost_total), 2), "color": "#3B82F6"}
+            ]
+            if tax_amt > 0:
+                inv_pie.append({"label": "Tax (VAT)", "label_ar": "ضريبة القيمة المضافة", "value": round(tax_amt, 2), "color": "#F59E0B"})
+            if shipping > 0:
+                inv_pie.append({"label": "Shipping", "label_ar": "الشحن", "value": round(shipping, 2), "color": "#8B5CF6"})
+
+        inv_dict["analytics"] = {
+            "is_loss": net_profit < 0,
+            "margin_pct": margin_pct,
+            "pie_chart": inv_pie,
+            "item_breakdown": [
+                {
+                    "name": it["description"],
+                    "quantity": it["quantity"],
+                    "revenue": it["total"],
+                    "cost": round(it["quantity"] * it["cost_price"], 2),
+                    "profit": it["profit"],
+                    "is_loss": it["profit"] < 0,
+                    "margin_pct": it["margin_pct"]
+                }
+                for it in item_rows
+            ]
+        }
+
         self.send_json({"success": True, "invoice": inv_dict})
 
     # ========================== CUSTOMERS ==========================
@@ -408,12 +537,33 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
             WHERE customer_id = ?
         """, (cust_id,)).fetchone()
 
-        cust_dict["stats"] = dict_from_row(stats)
+        cust_stats = dict_from_row(stats)
+        cust_profit = cust_stats.get("total_profit", 0.0)
+        cust_revenue = cust_stats.get("total_revenue", 0.0)
+        cust_cost = cust_stats.get("total_cost", 0.0)
+        cust_margin = round((cust_profit / cust_revenue * 100), 1) if cust_revenue > 0 else 0.0
+
+        if cust_profit < 0:
+            cust_pie = [
+                {"label": "Net Loss", "label_ar": "صافي الخسارة", "value": round(abs(cust_profit), 2), "color": "#EF4444"},
+                {"label": "Revenue", "label_ar": "المبيعات المحققة", "value": round(max(0.0, cust_revenue), 2), "color": "#3B82F6"}
+            ]
+        else:
+            cust_pie = [
+                {"label": "Net Profit", "label_ar": "أرباحك من العميل", "value": round(cust_profit, 2), "color": "#10B981"},
+                {"label": "Cost of Goods", "label_ar": "تكلفة البضاعة", "value": round(max(0.0, cust_cost), 2), "color": "#3B82F6"}
+            ]
+
+        cust_stats["margin_pct"] = cust_margin
+        cust_stats["is_loss"] = cust_profit < 0
+        cust_dict["stats"] = cust_stats
+        cust_dict["pie_chart"] = cust_pie
 
         # Orders list
         invoices = conn.execute("""
             SELECT
                 id, invoice_number, issue_date, due_date, status,
+                currency, currency_symbol,
                 total_amount, paid_amount, net_profit, (total_amount - paid_amount) as balance_due
             FROM invoices
             WHERE customer_id = ?
@@ -482,20 +632,20 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
 
         # Search customers (name, email, phone)
         custs = conn.execute("""
-            SELECT id, name, email, phone, address
+            SELECT id, name, email, phone, address, preferred_currency
             FROM customers
             WHERE name LIKE ? OR email LIKE ? OR phone LIKE ?
             LIMIT 10
         """, (like_term, like_term, like_term)).fetchall()
 
-        # Search invoices (number, customer name, date)
+        # Search invoices (number, customer name, customer phone, customer email, date)
         invs = conn.execute("""
-            SELECT i.id, i.invoice_number, i.issue_date, i.total_amount, i.status, c.name as customer_name
+            SELECT i.id, i.invoice_number, i.issue_date, i.total_amount, i.currency, i.currency_symbol, i.status, c.name as customer_name, c.phone as customer_phone
             FROM invoices i
             JOIN customers c ON i.customer_id = c.id
-            WHERE i.invoice_number LIKE ? OR c.name LIKE ? OR i.issue_date LIKE ?
+            WHERE i.invoice_number LIKE ? OR c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR i.issue_date LIKE ?
             LIMIT 10
-        """, (like_term, like_term, like_term)).fetchall()
+        """, (like_term, like_term, like_term, like_term, like_term)).fetchall()
 
         # Search products
         prods = conn.execute("""
@@ -514,7 +664,16 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
 
     # ========================== API POST ==========================
 
-    def handle_api_post(self, path, body):
+    def handle_api_post(self, path, body, query=None):
+        if query is None:
+            query = {}
+        if path == "/api/heartbeat":
+            tab_id = query.get("tab_id", [None])[0] or body.get("tab_id")
+            closing = (query.get("closing", [None])[0] in ("1", "true")) or (body.get("closing") in (1, True, "1", "true"))
+            server_state.record_heartbeat(tab_id=tab_id, closing=closing)
+            self.send_json({"success": True, "status": "alive"})
+            return
+
         conn = get_db_connection()
         try:
             if path == "/api/invoices":
@@ -551,19 +710,28 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
             self.send_error_json("At least one line item is required", 400)
             return
 
-        # Check stock if inventory mode is enabled
-        if inventory_mode:
+        status = data.get("status", "pending")
+        paid_amount = float(data.get("paid_amount", 0.0))
+
+        # Check stock if inventory mode is enabled and status is not draft/cancelled
+        stock_deducted = 0
+        if inventory_mode and status not in ["draft", "cancelled"]:
+            req_by_prod = {}
             for item in items:
                 prod_id = item.get("product_id")
                 qty = float(item.get("quantity", 1))
                 if prod_id:
-                    prod = conn.execute("SELECT name, stock_quantity FROM products WHERE id = ?", (prod_id,)).fetchone()
-                    if prod and prod["stock_quantity"] < qty:
-                        self.send_error_json(
-                            f"Insufficient stock for '{prod['name']}'. Available: {prod['stock_quantity']}, Requested: {qty}",
-                            400
-                        )
-                        return
+                    req_by_prod[prod_id] = req_by_prod.get(prod_id, 0.0) + qty
+
+            for prod_id, req_qty in req_by_prod.items():
+                prod = conn.execute("SELECT name, stock_quantity FROM products WHERE id = ?", (prod_id,)).fetchone()
+                if prod and prod["stock_quantity"] < req_qty:
+                    self.send_error_json(
+                        f"Insufficient stock for '{prod['name']}'. Available: {prod['stock_quantity']}, Requested: {req_qty}",
+                        400
+                    )
+                    return
+            stock_deducted = 1
 
         # Generate invoice number if not provided
         inv_number = data.get("invoice_number")
@@ -575,11 +743,9 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
 
         issue_date = data.get("issue_date", datetime.now().strftime("%Y-%m-%d"))
         due_date = data.get("due_date", issue_date)
-        status = data.get("status", "pending")
         discount = float(data.get("discount_amount", 0.0))
         tax_rate = float(data.get("tax_rate", 0.0))
         shipping = float(data.get("shipping_fee", 0.0))
-        paid_amount = float(data.get("paid_amount", 0.0))
         notes = data.get("notes", "")
 
         # Compute totals
@@ -604,8 +770,43 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
             calculated_items.append((prod_id, desc, qty, unit_price, cost_price, itm_disc, line_tot, line_profit))
 
         tax_amt = round((subtotal - discount) * (tax_rate / 100.0), 2) if (subtotal - discount) > 0 else 0.0
-        total_amt = round(subtotal - discount + tax_amt + shipping, 2)
+        total_amt = max(0.0, round(subtotal - discount + tax_amt + shipping, 2))
         net_prof = round((subtotal - discount) - cost_total, 2)
+
+        # Determine currency and currency_symbol
+        currency = data.get("currency")
+        currency_symbol = data.get("currency_symbol")
+
+        if currency in ("undefined", "null", ""):
+            currency = None
+        if currency_symbol in ("undefined", "null", ""):
+            currency_symbol = None
+
+        if not currency or not currency_symbol:
+            # Check customer's preferred currency
+            cust = conn.execute("SELECT preferred_currency FROM customers WHERE id = ?", (cust_id,)).fetchone()
+            cust_pref = cust["preferred_currency"] if cust and "preferred_currency" in cust.keys() else None
+
+            CURRENCY_SYMBOLS = {
+                "EGP": "ج.م",
+                "SAR": "ر.س",
+                "USD": "$",
+                "EUR": "€",
+                "AED": "د.إ",
+                "KWD": "د.ك",
+                "QAR": "ر.ق",
+                "GBP": "£"
+            }
+
+            if not currency:
+                sett_row = conn.execute("SELECT value FROM settings WHERE key = 'currency'").fetchone()
+                default_curr = sett_row["value"] if sett_row else "EGP"
+                currency = cust_pref or default_curr or "EGP"
+
+            if not currency_symbol:
+                sett_sym_row = conn.execute("SELECT value FROM settings WHERE key = 'currency_symbol'").fetchone()
+                default_sym = sett_sym_row["value"] if sett_sym_row else "ج.م"
+                currency_symbol = CURRENCY_SYMBOLS.get(currency) or default_sym or "ج.م"
 
         # Status auto-update based on payment
         if status not in ["draft", "cancelled"]:
@@ -620,13 +821,15 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
         cursor.execute("""
             INSERT INTO invoices (
                 invoice_number, customer_id, issue_date, due_date, status,
+                currency, currency_symbol,
                 subtotal, cost_total, discount_amount, tax_rate, tax_amount,
-                shipping_fee, total_amount, paid_amount, net_profit, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                shipping_fee, total_amount, paid_amount, net_profit, stock_deducted, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             inv_number, cust_id, issue_date, due_date, status,
+            currency, currency_symbol,
             subtotal, cost_total, discount, tax_rate, tax_amt,
-            shipping, total_amt, paid_amount, net_prof, notes
+            shipping, total_amt, paid_amount, net_prof, stock_deducted, notes
         ))
         inv_id = cursor.lastrowid
 
@@ -638,15 +841,15 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (inv_id, ci[0], ci[1], ci[2], ci[3], ci[4], ci[5], ci[6], ci[7]))
 
-            # Decrement inventory stock if enabled and not cancelled/draft
-            if inventory_mode and ci[0] and status != "cancelled":
+            # Decrement inventory stock if active
+            if stock_deducted and ci[0]:
                 cursor.execute(
                     "UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?",
                     (ci[2], ci[0])
                 )
 
         conn.commit()
-        self.send_json({"success": True, "invoice_id": inv_id, "invoice_number": inv_number})
+        self.send_json({"success": True, "invoice_id": inv_id, "invoice_number": inv_number, "currency": currency, "currency_symbol": currency_symbol})
 
     def record_payment(self, conn, inv_id, data):
         amount = float(data.get("amount", 0.0))
@@ -676,10 +879,11 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
             self.send_error_json("Customer name is required", 400)
             return
 
+        pref_currency = data.get("preferred_currency", "").strip() or "EGP"
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO customers (name, email, phone, address, notes) VALUES (?, ?, ?, ?, ?)",
-            (name, data.get("email", ""), data.get("phone", ""), data.get("address", ""), data.get("notes", ""))
+            "INSERT INTO customers (name, email, phone, address, notes, preferred_currency) VALUES (?, ?, ?, ?, ?, ?)",
+            (name, data.get("email", ""), data.get("phone", ""), data.get("address", ""), data.get("notes", ""), pref_currency)
         )
         conn.commit()
         self.send_json({"success": True, "customer_id": cursor.lastrowid})
@@ -760,20 +964,6 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
         inv_mode_row = conn.execute("SELECT value FROM settings WHERE key = 'inventory_mode'").fetchone()
         inventory_mode = inv_mode_row["value"] == "true" if inv_mode_row else False
 
-        # If inventory tracking is enabled, restore the old items' stock first before deducting new ones
-        cursor = conn.cursor()
-        if inventory_mode and existing["status"] != "cancelled":
-            old_items = cursor.execute(
-                "SELECT product_id, quantity FROM invoice_items WHERE invoice_id = ?",
-                (inv_id,)
-            ).fetchall()
-            for oi in old_items:
-                if oi["product_id"]:
-                    cursor.execute(
-                        "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?",
-                        (oi["quantity"], oi["product_id"])
-                    )
-
         # Parse new values
         cust_id = data.get("customer_id", existing["customer_id"])
         inv_number = data.get("invoice_number", existing["invoice_number"])
@@ -789,7 +979,7 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
         items = data.get("items", [])
         if not items:
             # Keep existing items if not provided
-            old_db_items = cursor.execute("SELECT * FROM invoice_items WHERE invoice_id = ?", (inv_id,)).fetchall()
+            old_db_items = conn.execute("SELECT * FROM invoice_items WHERE invoice_id = ?", (inv_id,)).fetchall()
             items = [dict_from_row(it) for it in old_db_items]
 
         # Calculate new items
@@ -814,7 +1004,7 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
             calculated_items.append((prod_id, desc, qty, unit_price, cost_price, itm_disc, line_tot, line_profit))
 
         tax_amt = round((subtotal - discount) * (tax_rate / 100.0), 2) if (subtotal - discount) > 0 else 0.0
-        total_amt = round(subtotal - discount + tax_amt + shipping, 2)
+        total_amt = max(0.0, round(subtotal - discount + tax_amt + shipping, 2))
         net_prof = round((subtotal - discount) - cost_total, 2)
 
         # Status update
@@ -826,16 +1016,91 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
             else:
                 status = "pending"
 
+        # Inventory stock validation & reconciliation
+        existing_stock_deducted = bool(existing["stock_deducted"]) if "stock_deducted" in existing.keys() else False
+        should_deduct_now = inventory_mode and (status not in ["draft", "cancelled"])
+
+        # Old items per product
+        old_item_qtys = {}
+        if existing_stock_deducted:
+            old_rows = conn.execute(
+                "SELECT product_id, quantity FROM invoice_items WHERE invoice_id = ?",
+                (inv_id,)
+            ).fetchall()
+            for r in old_rows:
+                if r["product_id"]:
+                    old_item_qtys[r["product_id"]] = old_item_qtys.get(r["product_id"], 0.0) + float(r["quantity"])
+
+        # New items per product
+        new_item_qtys = {}
+        if should_deduct_now:
+            for ci in calculated_items:
+                if ci[0]:
+                    new_item_qtys[ci[0]] = new_item_qtys.get(ci[0], 0.0) + float(ci[2])
+
+        # Validate stock availability before altering database
+        if should_deduct_now:
+            for pid, requested_qty in new_item_qtys.items():
+                prod = conn.execute("SELECT name, stock_quantity FROM products WHERE id = ?", (pid,)).fetchone()
+                if prod:
+                    previously_deducted = old_item_qtys.get(pid, 0.0)
+                    available_now = prod["stock_quantity"] + previously_deducted
+                    if requested_qty > available_now:
+                        self.send_error_json(
+                            f"Insufficient stock for '{prod['name']}'. Available: {available_now}, Requested: {requested_qty}",
+                            400
+                        )
+                        return
+
+        # Parse currency
+        currency = data.get("currency")
+        if currency in ("undefined", "null", "", None):
+            currency = existing["currency"] if "currency" in existing.keys() else "EGP"
+
+        currency_symbol = data.get("currency_symbol")
+        if currency_symbol in ("undefined", "null", ""):
+            currency_symbol = None
+
+        if not currency_symbol:
+            CURRENCY_SYMBOLS = {
+                "EGP": "ج.م",
+                "SAR": "ر.س",
+                "USD": "$",
+                "EUR": "€",
+                "AED": "د.إ",
+                "KWD": "د.ك",
+                "QAR": "ر.ق",
+                "GBP": "£"
+            }
+            currency_symbol = CURRENCY_SYMBOLS.get(currency, existing["currency_symbol"] if "currency_symbol" in existing.keys() else "ج.م")
+
+        cursor = conn.cursor()
+
+        # Restore previously deducted stock
+        if existing_stock_deducted:
+            for pid, qty in old_item_qtys.items():
+                cursor.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty, pid))
+
+        # Deduct new stock
+        if should_deduct_now:
+            for pid, qty in new_item_qtys.items():
+                cursor.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?", (qty, pid))
+            new_stock_deducted = 1
+        else:
+            new_stock_deducted = 0
+
         cursor.execute("""
             UPDATE invoices SET
                 invoice_number = ?, customer_id = ?, issue_date = ?, due_date = ?, status = ?,
+                currency = ?, currency_symbol = ?,
                 subtotal = ?, cost_total = ?, discount_amount = ?, tax_rate = ?, tax_amount = ?,
-                shipping_fee = ?, total_amount = ?, paid_amount = ?, net_profit = ?, notes = ?
+                shipping_fee = ?, total_amount = ?, paid_amount = ?, net_profit = ?, stock_deducted = ?, notes = ?
             WHERE id = ?
         """, (
             inv_number, cust_id, issue_date, due_date, status,
+            currency, currency_symbol,
             subtotal, cost_total, discount, tax_rate, tax_amt,
-            shipping, total_amt, paid_amount, net_prof, notes, inv_id
+            shipping, total_amt, paid_amount, net_prof, new_stock_deducted, notes, inv_id
         ))
 
         # Replace invoice items
@@ -848,13 +1113,6 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (inv_id, ci[0], ci[1], ci[2], ci[3], ci[4], ci[5], ci[6], ci[7]))
 
-            # Re-deduct inventory if active
-            if inventory_mode and ci[0] and status != "cancelled":
-                cursor.execute(
-                    "UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?",
-                    (ci[2], ci[0])
-                )
-
         conn.commit()
         self.send_json({"success": True, "invoice_id": inv_id})
 
@@ -865,7 +1123,8 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
                 email = COALESCE(?, email),
                 phone = COALESCE(?, phone),
                 address = COALESCE(?, address),
-                notes = COALESCE(?, notes)
+                notes = COALESCE(?, notes),
+                preferred_currency = COALESCE(?, preferred_currency)
             WHERE id = ?
         """, (
             data.get("name"),
@@ -873,6 +1132,7 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
             data.get("phone"),
             data.get("address"),
             data.get("notes"),
+            data.get("preferred_currency"),
             cust_id
         ))
         conn.commit()
@@ -912,9 +1172,7 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
                 self.delete_invoice(conn, inv_id)
             elif path.startswith("/api/customers/"):
                 cust_id = path.split("/")[-1]
-                conn.execute("DELETE FROM customers WHERE id = ?", (cust_id,))
-                conn.commit()
-                self.send_json({"success": True})
+                self.delete_customer(conn, cust_id)
             elif path.startswith("/api/products/"):
                 prod_id = path.split("/")[-1]
                 conn.execute("DELETE FROM products WHERE id = ?", (prod_id,))
@@ -926,24 +1184,48 @@ class InvoiceAPIHandler(http.server.BaseHTTPRequestHandler):
             conn.close()
 
     def delete_invoice(self, conn, inv_id):
-        inv_mode_row = conn.execute("SELECT value FROM settings WHERE key = 'inventory_mode'").fetchone()
-        inventory_mode = inv_mode_row["value"] == "true" if inv_mode_row else False
+        cursor = conn.cursor()
+        inv = cursor.execute("SELECT * FROM invoices WHERE id = ?", (inv_id,)).fetchone()
+        if inv:
+            is_deducted = bool(inv["stock_deducted"]) if "stock_deducted" in inv.keys() else False
+            if is_deducted:
+                old_items = cursor.execute(
+                    "SELECT product_id, quantity FROM invoice_items WHERE invoice_id = ?",
+                    (inv_id,)
+                ).fetchall()
+                for oi in old_items:
+                    if oi["product_id"]:
+                        cursor.execute(
+                            "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?",
+                            (oi["quantity"], oi["product_id"])
+                        )
 
-        inv = conn.execute("SELECT status FROM invoices WHERE id = ?", (inv_id,)).fetchone()
-        if inv and inventory_mode and inv["status"] != "cancelled":
-            # Restore stock
-            old_items = conn.execute(
-                "SELECT product_id, quantity FROM invoice_items WHERE invoice_id = ?",
-                (inv_id,)
-            ).fetchall()
-            for oi in old_items:
-                if oi["product_id"]:
-                    conn.execute(
-                        "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?",
-                        (oi["quantity"], oi["product_id"])
-                    )
+        cursor.execute("DELETE FROM invoices WHERE id = ?", (inv_id,))
+        conn.commit()
+        self.send_json({"success": True})
 
-        conn.execute("DELETE FROM invoices WHERE id = ?", (inv_id,))
+    def delete_customer(self, conn, cust_id):
+        cursor = conn.cursor()
+        # Find all invoices belonging to this customer with stock_deducted == 1 and restore their stock
+        inv_rows = cursor.execute(
+            "SELECT id, stock_deducted FROM invoices WHERE customer_id = ?",
+            (cust_id,)
+        ).fetchall()
+        for r in inv_rows:
+            is_deducted = bool(r["stock_deducted"]) if "stock_deducted" in r.keys() else False
+            if is_deducted:
+                items = cursor.execute(
+                    "SELECT product_id, quantity FROM invoice_items WHERE invoice_id = ?",
+                    (r["id"],)
+                ).fetchall()
+                for itm in items:
+                    if itm["product_id"]:
+                        cursor.execute(
+                            "UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?",
+                            (itm["quantity"], itm["product_id"])
+                        )
+
+        cursor.execute("DELETE FROM customers WHERE id = ?", (cust_id,))
         conn.commit()
         self.send_json({"success": True})
 

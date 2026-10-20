@@ -32,8 +32,40 @@ const App = {
     // Render active view
     this.navigate("dashboard");
 
+    // Keepalive heartbeat for desktop fallback / browser mode
+    this.initHeartbeat();
+
     // Global expose
     window.renderActiveView = () => this.renderActiveView();
+  },
+
+  initHeartbeat() {
+    const tabId = "tab_" + Math.random().toString(36).substring(2, 11);
+    const ping = () => {
+      fetch("/api/heartbeat?tab_id=" + encodeURIComponent(tabId), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      }).catch(() => {});
+    };
+    ping();
+    setInterval(ping, 3000);
+
+    window.addEventListener("beforeunload", () => {
+      try {
+        const closeUrl = "/api/heartbeat?closing=1&tab_id=" + encodeURIComponent(tabId);
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon(closeUrl, "{}");
+        } else {
+          fetch(closeUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ closing: true, tab_id: tabId }),
+            keepalive: true
+          }).catch(() => {});
+        }
+      } catch (e) {}
+    });
   },
 
   bindEvents() {
@@ -95,11 +127,65 @@ const App = {
         document.getElementById("search-results-dropdown").classList.remove("active");
       }
     });
+
+    // Responsive debounced window resize handler for crisp canvas rendering
+    let resizeDebounceTimer = null;
+    window.addEventListener("resize", () => {
+      clearTimeout(resizeDebounceTimer);
+      resizeDebounceTimer = setTimeout(() => {
+        this.redrawActiveCharts();
+      }, 60);
+    });
+
+    // ResizeObserver on chart wrappers for container-level adaptation
+    this.setupChartResizeObserver();
   },
 
   setTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("app_theme", theme);
+    this.redrawActiveCharts();
+  },
+
+  setupChartResizeObserver() {
+    if (typeof ResizeObserver === "undefined") return;
+    if (this._chartResizeObserver) {
+      this._chartResizeObserver.disconnect();
+    }
+    let rAF = null;
+    this._chartResizeObserver = new ResizeObserver(() => {
+      if (rAF) cancelAnimationFrame(rAF);
+      rAF = requestAnimationFrame(() => {
+        this.redrawActiveCharts();
+      });
+    });
+    this.observeChartContainers();
+  },
+
+  observeChartContainers() {
+    if (!this._chartResizeObserver) return;
+    this._chartResizeObserver.disconnect();
+    document.querySelectorAll(".chart-canvas-wrapper").forEach(wrapper => {
+      this._chartResizeObserver.observe(wrapper);
+    });
+  },
+
+  redrawActiveCharts() {
+    const tooltip = document.getElementById("chart-tooltip");
+    if (tooltip) tooltip.style.display = "none";
+
+    const invModal = document.getElementById("modal-invoice-dashboard");
+    if (invModal && invModal.classList.contains("active")) {
+      this.renderInvoiceDashboardCharts();
+    }
+
+    if (this.currentView === "dashboard") {
+      this.renderDashboardCharts();
+    } else if (this.currentView === "customer_detail") {
+      this.renderCustomerDetailCharts();
+    } else if (this.currentView === "reports") {
+      this.renderReportsCharts();
+    }
   },
 
   async loadSettings() {
@@ -108,7 +194,7 @@ const App = {
       const data = await res.json();
       if (data.success) {
         this.settings = data.settings || {};
-        window.appCurrencySymbol = this.settings.currency_symbol || (currentLanguage === "ar" ? "ر.س" : "SAR");
+        window.appCurrencySymbol = this.settings.currency_symbol || (currentLanguage === "ar" ? "ج.م" : "EGP");
 
         // Show/hide inventory nav button based on setting
         const invBtn = document.getElementById("nav-inventory-btn");
@@ -242,10 +328,10 @@ const App = {
           html += `
             <div class="search-item" onclick="App.openCustomerDashboard(${c.id})">
               <div class="search-item-info">
-                <span class="search-item-title">${c.name}</span>
+                <span class="search-item-title"><bdi class="customer-bdi">${c.name}</bdi></span>
                 <span class="search-item-meta">${c.phone || ""} ${c.email ? "• " + c.email : ""}</span>
               </div>
-              <span class="badge badge-secondary">${t("customer")}</span>
+              <span class="badge badge-secondary">${c.preferred_currency || t("customer")}</span>
             </div>
           `;
         });
@@ -255,10 +341,10 @@ const App = {
         html += `<div class="search-category-header">${t("navInvoices")}</div>`;
         invoices.forEach(i => {
           html += `
-            <div class="search-item" onclick="App.previewInvoice(${i.id})">
+            <div class="search-item" onclick="App.openInvoiceDashboard(${i.id})">
               <div class="search-item-info">
-                <span class="search-item-title">${i.invoice_number} - ${i.customer_name}</span>
-                <span class="search-item-meta">${i.issue_date} • ${formatCurrency(i.total_amount)}</span>
+                <span class="search-item-title">${i.invoice_number} - <bdi class="customer-bdi">${i.customer_name}</bdi></span>
+                <span class="search-item-meta">${i.issue_date} • ${formatCurrency(i.total_amount, i.currency_symbol || i.currency)}</span>
               </div>
               <span class="badge badge-${i.status === 'paid' ? 'success' : (i.status === 'partial' ? 'warning' : 'danger')}">${i.status}</span>
             </div>
@@ -299,6 +385,7 @@ const App = {
       if (!data.success) return;
 
       const { summary, histogram, pie_charts } = data;
+      this.dashboardData = data;
 
       // Update sidebar quick profit
       document.getElementById("sidebar-total-profit").textContent = formatCurrency(summary.total_profit);
@@ -344,7 +431,7 @@ const App = {
         ${futureAlertHtml}
 
         <!-- 6 KPI Metric Cards -->
-        <div class="metrics-grid">
+        <div class="metrics-grid stats-grid kpi-grid">
           <div class="metric-card card-accent-primary">
             <div class="metric-card-top">
               <span class="metric-card-label" data-i18n="totalRevenue">${t("totalRevenue")}</span>
@@ -450,7 +537,7 @@ const App = {
               </div>
             </div>
             <div class="chart-canvas-wrapper">
-              <canvas id="dashboard-histogram-canvas"></canvas>
+              <canvas id="hist-canvas" data-canvas="dashboard-histogram-canvas"></canvas>
             </div>
           </div>
 
@@ -459,7 +546,7 @@ const App = {
               <span class="chart-card-title">${t("profitVsCost")}</span>
             </div>
             <div class="chart-canvas-wrapper">
-              <canvas id="dashboard-donut-canvas"></canvas>
+              <canvas id="donut-canvas" data-canvas="dashboard-donut-canvas"></canvas>
             </div>
           </div>
         </div>
@@ -492,13 +579,26 @@ const App = {
       `;
 
       // Draw Charts after DOM insertion
-      const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-      const tooltip = document.getElementById("chart-tooltip");
+      this.renderDashboardCharts();
+      this.observeChartContainers();
 
-      const histCanvas = document.getElementById("dashboard-histogram-canvas");
+    } catch (e) {
+      console.error("Dashboard render error:", e);
+    }
+  },
+
+  renderDashboardCharts() {
+    if (!this.dashboardData) return;
+    const { summary, histogram, pie_charts } = this.dashboardData;
+    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+    const tooltip = document.getElementById("chart-tooltip");
+
+    const histCanvas = document.getElementById("hist-canvas") || document.getElementById("dashboard-histogram-canvas");
+    if (histCanvas && histogram) {
       MiniChartEngine.renderHistogram(histCanvas, histogram, {
         isDark,
         onHover: (d, x, y) => {
+          if (!tooltip) return;
           tooltip.style.display = "block";
           tooltip.style.left = `${x + 12}px`;
           tooltip.style.top = `${y - 20}px`;
@@ -509,15 +609,19 @@ const App = {
             ${t("totalOrders")}: ${d.order_count}
           `;
         },
-        onLeave: () => { tooltip.style.display = "none"; }
+        onLeave: () => { if (tooltip) tooltip.style.display = "none"; }
       });
+    }
 
-      const donutCanvas = document.getElementById("dashboard-donut-canvas");
+    const donutCanvas = document.getElementById("donut-canvas") || document.getElementById("dashboard-donut-canvas");
+    if (donutCanvas && pie_charts && pie_charts.profit_cost) {
       MiniChartEngine.renderDonut(donutCanvas, pie_charts.profit_cost, {
         isDark,
-        centerLabel: t("profitMargin"),
-        centerValue: `${summary.margin_pct}%`,
+        isLoss: summary ? summary.is_loss : false,
+        centerLabel: summary && summary.is_loss ? t("netLoss") : t("profitMargin"),
+        centerValue: summary && summary.is_loss ? formatCurrency(summary.total_profit) : `${summary ? summary.margin_pct : 0}%`,
         onHover: (item, pct, x, y) => {
+          if (!tooltip) return;
           tooltip.style.display = "block";
           tooltip.style.left = `${x + 12}px`;
           tooltip.style.top = `${y - 20}px`;
@@ -526,11 +630,8 @@ const App = {
             ${formatCurrency(item.value)} (${pct}%)
           `;
         },
-        onLeave: () => { tooltip.style.display = "none"; }
+        onLeave: () => { if (tooltip) tooltip.style.display = "none"; }
       });
-
-    } catch (e) {
-      console.error("Dashboard render error:", e);
     }
   },
 
@@ -556,37 +657,61 @@ const App = {
         cancelled: t("statusCancelled")
       }[i.status] || i.status;
 
+      const isLoss = (i.net_profit || 0) < 0;
+      const cur = i.currency_symbol || i.currency;
+
       return `
         <tr>
-          <td>
-            <a href="#" onclick="App.previewInvoice(${i.id}); return false;" style="font-weight: 700; color: var(--primary); text-decoration: none;">
+          <td class="cell-nowrap">
+            <a href="#" onclick="App.openInvoiceDashboard(${i.id}); return false;" style="font-weight: 700; color: var(--primary); text-decoration: none;" title="${t('invoiceDashboard')}">
               ${i.invoice_number}
             </a>
           </td>
           <td>
             <a href="#" onclick="App.openCustomerDashboard(${i.customer_id}); return false;" style="font-weight: 600; color: var(--text-main); text-decoration: none;">
-              ${i.customer_name}
+              <bdi class="customer-bdi">${i.customer_name}</bdi>
             </a>
           </td>
-          <td class="text-muted">${i.issue_date}</td>
-          <td class="font-bold">${formatCurrency(i.total_amount)}</td>
-          <td class="text-success font-semibold">${formatCurrency(i.net_profit)}</td>
-          <td><span class="badge ${badgeClass}">${statusText}</span></td>
-          <td style="text-align: end; white-space: nowrap;">
-            <button class="btn-secondary" style="height: 28px; padding: 0 8px; font-size: 11px; display: inline-flex;" onclick="App.previewInvoice(${i.id})" title="${t('view')}">
-              ${t('view')}
-            </button>
-            <button class="btn-secondary" style="height: 28px; padding: 0 8px; font-size: 11px; display: inline-flex;" onclick="App.openEditInvoiceModal(${i.id})" title="${t('edit')}">
-              ${t('edit')}
-            </button>
-            ${i.status !== 'paid' && i.status !== 'cancelled' ? `
-              <button class="btn-primary" style="height: 28px; padding: 0 8px; font-size: 11px; display: inline-flex;" onclick="App.openPaymentModal(${i.id}, '${i.invoice_number}', ${i.balance_due})" title="${t('recordPayment')}">
-                ${t('recordPayment')}
+          <td class="text-muted cell-date">${i.issue_date}</td>
+          <td class="font-bold cell-currency">${formatCurrency(i.total_amount, cur)}</td>
+          <td class="${isLoss ? 'text-danger' : 'text-success'} font-semibold cell-currency">${formatCurrency(i.net_profit, cur)}</td>
+          <td class="cell-nowrap"><span class="badge ${badgeClass}">${statusText}</span></td>
+          <td style="text-align: end;" class="cell-nowrap">
+            <div class="table-actions">
+              <button class="btn-action-icon action-primary" onclick="App.openInvoiceDashboard(${i.id})" title="${t('viewDashboard')}" aria-label="${t('viewDashboard')}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <line x1="18" y1="20" x2="18" y2="10"></line>
+                  <line x1="12" y1="20" x2="12" y2="4"></line>
+                  <line x1="6" y1="20" x2="6" y2="14"></line>
+                </svg>
               </button>
-            ` : ""}
-            <button class="btn-secondary text-danger" style="height: 28px; padding: 0 6px; font-size: 11px; display: inline-flex;" onclick="App.deleteInvoice(${i.id})" title="${t('delete')}">
-              ✕
-            </button>
+              <button class="btn-action-icon" onclick="App.previewInvoice(${i.id})" title="${t('view')}" aria-label="${t('view')}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+              </button>
+              <button class="btn-action-icon" onclick="App.openEditInvoiceModal(${i.id})" title="${t('edit')}" aria-label="${t('edit')}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+              </button>
+              ${i.status !== 'paid' && i.status !== 'cancelled' ? `
+                <button class="btn-action-icon action-pay" onclick="App.openPaymentModal(${i.id}, '${i.invoice_number}', ${i.balance_due}, '${cur}')" title="${t('recordPayment')}" aria-label="${t('recordPayment')}">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                    <rect x="2" y="5" width="20" height="14" rx="2"></rect>
+                    <line x1="2" y1="10" x2="22" y2="10"></line>
+                  </svg>
+                </button>
+              ` : ""}
+              <button class="btn-action-icon action-danger" onclick="App.deleteInvoice(${i.id})" title="${t('delete')}" aria-label="${t('delete')}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+              </button>
+            </div>
           </td>
         </tr>
       `;
@@ -702,40 +827,64 @@ const App = {
           cancelled: t("statusCancelled")
         }[i.status] || i.status;
 
+        const isLoss = (i.net_profit || 0) < 0;
+        const cur = i.currency_symbol || i.currency;
+
         return `
           <tr>
-            <td>
-              <a href="#" onclick="App.previewInvoice(${i.id}); return false;" style="font-weight: 700; color: var(--primary); text-decoration: none;">
+            <td class="cell-nowrap">
+              <a href="#" onclick="App.openInvoiceDashboard(${i.id}); return false;" style="font-weight: 700; color: var(--primary); text-decoration: none;" title="${t('invoiceDashboard')}">
                 ${i.invoice_number}
               </a>
             </td>
             <td>
               <a href="#" onclick="App.openCustomerDashboard(${i.customer_id}); return false;" style="font-weight: 600; color: var(--text-main); text-decoration: none;">
-                ${i.customer_name}
+                <bdi class="customer-bdi">${i.customer_name}</bdi>
               </a>
             </td>
-            <td class="text-muted">${i.issue_date}</td>
-            <td class="text-muted">${i.due_date}</td>
-            <td class="font-bold">${formatCurrency(i.total_amount)}</td>
-            <td class="text-success">${formatCurrency(i.paid_amount)}</td>
-            <td class="${i.balance_due > 0 ? 'text-danger font-bold' : 'text-muted'}">${formatCurrency(i.balance_due)}</td>
-            <td class="text-success font-semibold">${formatCurrency(i.net_profit)}</td>
-            <td><span class="badge ${badgeClass}">${statusText}</span></td>
-            <td style="text-align: end; white-space: nowrap;">
-              <button class="btn-secondary" style="height: 28px; padding: 0 8px; font-size: 11px; display: inline-flex;" onclick="App.previewInvoice(${i.id})">
-                ${t('view')}
-              </button>
-              <button class="btn-secondary" style="height: 28px; padding: 0 8px; font-size: 11px; display: inline-flex;" onclick="App.openEditInvoiceModal(${i.id})">
-                ${t('edit')}
-              </button>
-              ${i.status !== 'paid' && i.status !== 'cancelled' ? `
-                <button class="btn-primary" style="height: 28px; padding: 0 8px; font-size: 11px; display: inline-flex;" onclick="App.openPaymentModal(${i.id}, '${i.invoice_number}', ${i.balance_due})">
-                  ${t('recordPayment')}
+            <td class="text-muted cell-date">${i.issue_date}</td>
+            <td class="text-muted cell-date">${i.due_date}</td>
+            <td class="font-bold cell-currency">${formatCurrency(i.total_amount, cur)}</td>
+            <td class="text-success cell-currency">${formatCurrency(i.paid_amount, cur)}</td>
+            <td class="${i.balance_due > 0 ? 'text-danger font-bold' : 'text-muted'} cell-currency">${formatCurrency(i.balance_due, cur)}</td>
+            <td class="${isLoss ? 'text-danger' : 'text-success'} font-semibold cell-currency">${formatCurrency(i.net_profit, cur)}</td>
+            <td class="cell-nowrap"><span class="badge ${badgeClass}">${statusText}</span></td>
+            <td style="text-align: end;" class="cell-nowrap">
+              <div class="table-actions">
+                <button class="btn-action-icon action-primary" onclick="App.openInvoiceDashboard(${i.id})" title="${t('viewDashboard')}" aria-label="${t('viewDashboard')}">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                    <line x1="18" y1="20" x2="18" y2="10"></line>
+                    <line x1="12" y1="20" x2="12" y2="4"></line>
+                    <line x1="6" y1="20" x2="6" y2="14"></line>
+                  </svg>
                 </button>
-              ` : ""}
-              <button class="btn-secondary text-danger" style="height: 28px; padding: 0 6px; font-size: 11px; display: inline-flex;" onclick="App.deleteInvoice(${i.id})">
-                ✕
-              </button>
+                <button class="btn-action-icon" onclick="App.previewInvoice(${i.id})" title="${t('view')}" aria-label="${t('view')}">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                </button>
+                <button class="btn-action-icon" onclick="App.openEditInvoiceModal(${i.id})" title="${t('edit')}" aria-label="${t('edit')}">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                  </svg>
+                </button>
+                ${i.status !== 'paid' && i.status !== 'cancelled' ? `
+                  <button class="btn-action-icon action-pay" onclick="App.openPaymentModal(${i.id}, '${i.invoice_number}', ${i.balance_due}, '${cur}')" title="${t('recordPayment')}" aria-label="${t('recordPayment')}">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                      <rect x="2" y="5" width="20" height="14" rx="2"></rect>
+                      <line x1="2" y1="10" x2="22" y2="10"></line>
+                    </svg>
+                  </button>
+                ` : ""}
+                <button class="btn-action-icon action-danger" onclick="App.deleteInvoice(${i.id})" title="${t('delete')}" aria-label="${t('delete')}">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                </button>
+              </div>
             </td>
           </tr>
         `;
@@ -795,36 +944,57 @@ const App = {
       return;
     }
 
-    tbody.innerHTML = this.customers.map(c => `
-      <tr>
-        <td>
-          <a href="#" onclick="App.openCustomerDashboard(${c.id}); return false;" style="font-weight: 700; color: var(--primary); text-decoration: none; font-size: 13.5px;">
-            ${c.name}
-          </a>
-          ${c.notes ? `<span class="text-muted text-xs block">${c.notes}</span>` : ""}
-        </td>
-        <td class="text-muted">${c.phone || "-"}</td>
-        <td class="text-muted">${c.email || "-"}</td>
-        <td class="font-semibold">${c.total_orders}</td>
-        <td class="font-bold">${formatCurrency(c.total_spent)}</td>
-        <td class="text-success font-semibold">${formatCurrency(c.total_profit)}</td>
-        <td class="${c.total_unpaid > 0 ? 'text-danger font-bold' : 'text-muted'}">${formatCurrency(c.total_unpaid)}</td>
-        <td style="text-align: end; white-space: nowrap;">
-          <button class="btn-secondary" style="height: 28px; padding: 0 8px; font-size: 11px; display: inline-flex;" onclick="App.openCustomerDashboard(${c.id})">
-            ${t('view')}
-          </button>
-          <button class="btn-secondary" style="height: 28px; padding: 0 8px; font-size: 11px; display: inline-flex;" onclick="App.openEditCustomerModal(${c.id})">
-            ${t('edit')}
-          </button>
-          <button class="btn-primary" style="height: 28px; padding: 0 8px; font-size: 11px; display: inline-flex;" onclick="App.openInvoiceModal(${c.id})">
-            + ${t('newInvoice')}
-          </button>
-          <button class="btn-secondary text-danger" style="height: 28px; padding: 0 6px; font-size: 11px; display: inline-flex;" onclick="App.deleteCustomer(${c.id})">
-            ✕
-          </button>
-        </td>
-      </tr>
-    `).join("");
+    tbody.innerHTML = this.customers.map(c => {
+      const cur = c.preferred_currency || "EGP";
+      const isLoss = (c.total_profit || 0) < 0;
+      return `
+        <tr>
+          <td>
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+              <a href="#" onclick="App.openCustomerDashboard(${c.id}); return false;" style="font-weight: 700; color: var(--primary); text-decoration: none; font-size: 13.5px;">
+                <bdi class="customer-bdi">${c.name}</bdi>
+              </a>
+              <span class="badge badge-secondary" style="font-size: 10px; padding: 2px 6px;">${cur}</span>
+            </div>
+            ${c.notes ? `<span class="text-muted text-xs block">${c.notes}</span>` : ""}
+          </td>
+          <td class="text-muted cell-nowrap">${c.phone || "-"}</td>
+          <td class="text-muted cell-nowrap">${c.email || "-"}</td>
+          <td class="font-semibold cell-nowrap">${c.total_orders}</td>
+          <td class="font-bold cell-nowrap cell-currency">${formatCurrency(c.total_spent, cur)}</td>
+          <td class="${isLoss ? 'text-danger' : 'text-success'} font-semibold cell-nowrap cell-currency">${formatCurrency(c.total_profit, cur)}</td>
+          <td class="${c.total_unpaid > 0 ? 'text-danger font-bold' : 'text-muted'} cell-nowrap cell-currency">${formatCurrency(c.total_unpaid, cur)}</td>
+          <td style="text-align: end;" class="cell-nowrap">
+            <div class="table-actions">
+              <button class="btn-action-icon action-primary" onclick="App.openCustomerDashboard(${c.id})" title="${t('view')}" aria-label="${t('view')}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+              </button>
+              <button class="btn-action-icon" onclick="App.openEditCustomerModal(${c.id})" title="${t('edit')}" aria-label="${t('edit')}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+              </button>
+              <button class="btn-action-icon action-pay" onclick="App.openInvoiceModal(${c.id})" title="${t('newInvoice')}" aria-label="${t('newInvoice')}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+              </button>
+              <button class="btn-action-icon action-danger" onclick="App.deleteCustomer(${c.id})" title="${t('delete')}" aria-label="${t('delete')}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+              </button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join("");
   },
 
   // ========================== CUSTOMER DETAIL DASHBOARD ==========================
@@ -848,6 +1018,8 @@ const App = {
       const stats = cust.stats || {};
       const orders = cust.orders || [];
       const histogram = cust.histogram || [];
+      const custCur = cust.preferred_currency || "EGP";
+      this.currentCustomerData = { cust, stats, orders, histogram, custCur };
 
       // Separate future vs completed
       const todayStr = new Date().toISOString().split("T")[0];
@@ -860,7 +1032,10 @@ const App = {
               ← ${t("navCustomers")}
             </button>
             <div>
-              <h2 style="font-size: 22px; font-weight: 800;">${cust.name}</h2>
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <h2 style="font-size: 22px; font-weight: 800;"><bdi class="customer-bdi">${cust.name}</bdi></h2>
+                <span class="badge badge-secondary" style="font-size: 11px;">${custCur}</span>
+              </div>
               <p class="text-muted">${cust.phone || ""} ${cust.email ? "• " + cust.email : ""} ${cust.address ? "• " + cust.address : ""}</p>
             </div>
           </div>
@@ -875,33 +1050,44 @@ const App = {
         </div>
 
         <!-- Customer Metrics -->
-        <div class="metrics-grid">
+        <div class="metrics-grid metrics-grid-3 customer-kpi-grid">
           <div class="metric-card card-accent-primary">
             <span class="metric-card-label">${t("lifetimeSpent")}</span>
-            <span class="metric-card-value">${formatCurrency(stats.total_revenue)}</span>
+            <span class="metric-card-value">${formatCurrency(stats.total_revenue, custCur)}</span>
             <span class="metric-card-sub">${stats.total_orders} ${t("totalOrders")}</span>
           </div>
 
-          <div class="metric-card card-accent-profit">
-            <span class="metric-card-label">${t("lifetimeProfit")}</span>
-            <span class="metric-card-value">${formatCurrency(stats.total_profit)}</span>
+          <div class="metric-card ${stats.is_loss ? 'card-accent-loss' : 'card-accent-profit'}">
+            <span class="metric-card-label">${stats.is_loss ? t("netLoss") : t("lifetimeProfit")}</span>
+            <span class="metric-card-value ${stats.is_loss ? 'text-danger' : 'text-success'}">${formatCurrency(stats.total_profit, custCur)}</span>
             <span class="metric-card-sub">${t("profitMargin")}: ${stats.total_revenue > 0 ? ((stats.total_profit / stats.total_revenue) * 100).toFixed(1) : 0}%</span>
           </div>
 
           <div class="metric-card card-accent-loss">
             <span class="metric-card-label">${t("unpaidBalance")}</span>
-            <span class="metric-card-value">${formatCurrency(stats.unpaid_balance)}</span>
+            <span class="metric-card-value">${formatCurrency(stats.unpaid_balance, custCur)}</span>
             <span class="metric-card-sub">${stats.unpaid_balance > 0 ? t("statusPending") : t("statusPaid")}</span>
           </div>
         </div>
 
-        <!-- Customer Profit Histogram -->
-        <div class="chart-card">
-          <div class="chart-card-header">
-            <span class="chart-card-title">${cust.name} - ${t("financialPerformance")}</span>
+        <!-- Customer Charts Grid: Donut + Histogram -->
+        <div class="dashboard-grid-2">
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <span class="chart-card-title">${t("profitVsCostAndLoss")}</span>
+            </div>
+            <div class="chart-canvas-wrapper" style="height: 250px; position: relative;">
+              <canvas id="customer-donut-canvas" style="width: 100%; height: 100%;"></canvas>
+            </div>
           </div>
-          <div class="chart-canvas-wrapper">
-            <canvas id="customer-hist-canvas"></canvas>
+
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <span class="chart-card-title"><bdi class="customer-bdi">${cust.name}</bdi> - ${t("financialPerformance")}</span>
+            </div>
+            <div class="chart-canvas-wrapper" style="height: 250px; position: relative;">
+              <canvas id="customer-hist-canvas" style="width: 100%; height: 100%;"></canvas>
+            </div>
           </div>
         </div>
 
@@ -924,19 +1110,47 @@ const App = {
                   </tr>
                 </thead>
                 <tbody>
-                  ${futureOrders.map(o => `
+                  ${futureOrders.map(o => {
+                    const oCur = o.currency_symbol || o.currency || custCur;
+                    return `
                     <tr>
-                      <td><a href="#" onclick="App.previewInvoice(${o.id}); return false;" style="font-weight: 700; color: var(--primary);">${o.invoice_number}</a></td>
-                      <td>${o.issue_date}</td>
-                      <td>${o.due_date}</td>
-                      <td class="font-bold">${formatCurrency(o.total_amount)}</td>
-                      <td><span class="badge badge-warning">${o.status}</span></td>
-                      <td style="text-align: end;">
-                        <button class="btn-secondary" style="height: 26px; font-size: 11px;" onclick="App.openEditInvoiceModal(${o.id})">${t("edit")}</button>
-                        <button class="btn-secondary" style="height: 26px; font-size: 11px;" onclick="App.previewInvoice(${o.id})">${t("view")}</button>
+                      <td class="cell-nowrap"><a href="#" onclick="App.openInvoiceDashboard(${o.id}); return false;" style="font-weight: 700; color: var(--primary);" title="${t('invoiceDashboard')}">${o.invoice_number}</a></td>
+                      <td class="text-muted cell-nowrap cell-date">${o.issue_date}</td>
+                      <td class="text-muted cell-nowrap cell-date">${o.due_date}</td>
+                      <td class="font-bold cell-nowrap cell-currency">${formatCurrency(o.total_amount, oCur)}</td>
+                      <td class="cell-nowrap"><span class="badge badge-warning">${o.status}</span></td>
+                      <td style="text-align: end;" class="cell-nowrap">
+                        <div class="table-actions">
+                          <button class="btn-action-icon action-primary" onclick="App.openInvoiceDashboard(${o.id})" title="${t('viewDashboard')}" aria-label="${t('viewDashboard')}">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                              <line x1="18" y1="20" x2="18" y2="10"></line>
+                              <line x1="12" y1="20" x2="12" y2="4"></line>
+                              <line x1="6" y1="20" x2="6" y2="14"></line>
+                            </svg>
+                          </button>
+                          <button class="btn-action-icon" onclick="App.previewInvoice(${o.id})" title="${t('view')}" aria-label="${t('view')}">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                              <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                          </button>
+                          <button class="btn-action-icon" onclick="App.openEditInvoiceModal(${o.id})" title="${t('edit')}" aria-label="${t('edit')}">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                            </svg>
+                          </button>
+                          <button class="btn-action-icon action-danger" onclick="App.deleteInvoice(${o.id})" title="${t('delete')}" aria-label="${t('delete')}">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                              <polyline points="3 6 5 6 21 6"></polyline>
+                              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                            </svg>
+                          </button>
+                        </div>
                       </td>
                     </tr>
-                  `).join("")}
+                    `;
+                  }).join("")}
                 </tbody>
               </table>
             </div>
@@ -965,49 +1179,122 @@ const App = {
               </thead>
               <tbody>
                 ${orders.length === 0 ? `<tr><td colspan="9" class="text-center text-muted" style="padding: 20px;">${t("noRecordsFound")}</td></tr>` :
-                  orders.map(o => `
-                    <tr>
-                      <td><a href="#" onclick="App.previewInvoice(${o.id}); return false;" style="font-weight: 700; color: var(--primary);">${o.invoice_number}</a></td>
-                      <td class="text-muted">${o.issue_date}</td>
-                      <td class="text-muted">${o.due_date}</td>
-                      <td class="font-bold">${formatCurrency(o.total_amount)}</td>
-                      <td class="text-success">${formatCurrency(o.paid_amount)}</td>
-                      <td class="${o.balance_due > 0 ? 'text-danger font-bold' : 'text-muted'}">${formatCurrency(o.balance_due)}</td>
-                      <td class="text-success font-semibold">${formatCurrency(o.net_profit)}</td>
-                      <td><span class="badge badge-${o.status === 'paid' ? 'success' : (o.status === 'partial' ? 'warning' : 'danger')}">${o.status}</span></td>
-                      <td style="text-align: end; white-space: nowrap;">
-                        <button class="btn-secondary" style="height: 26px; font-size: 11px;" onclick="App.previewInvoice(${o.id})">${t("view")}</button>
-                        <button class="btn-secondary" style="height: 26px; font-size: 11px;" onclick="App.openEditInvoiceModal(${o.id})">${t("edit")}</button>
-                      </td>
-                    </tr>
-                  `).join("")}
+                  orders.map(o => {
+                    const oLoss = (o.net_profit || 0) < 0;
+                    const oCur = o.currency_symbol || o.currency || custCur;
+                    return `
+                      <tr>
+                        <td class="cell-nowrap"><a href="#" onclick="App.openInvoiceDashboard(${o.id}); return false;" style="font-weight: 700; color: var(--primary);" title="${t('invoiceDashboard')}">${o.invoice_number}</a></td>
+                        <td class="text-muted cell-nowrap cell-date">${o.issue_date}</td>
+                        <td class="text-muted cell-nowrap cell-date">${o.due_date}</td>
+                        <td class="font-bold cell-nowrap cell-currency">${formatCurrency(o.total_amount, oCur)}</td>
+                        <td class="text-success cell-nowrap cell-currency">${formatCurrency(o.paid_amount, oCur)}</td>
+                        <td class="${o.balance_due > 0 ? 'text-danger font-bold' : 'text-muted'} cell-nowrap cell-currency">${formatCurrency(o.balance_due, oCur)}</td>
+                        <td class="${oLoss ? 'text-danger' : 'text-success'} font-semibold cell-nowrap cell-currency">${formatCurrency(o.net_profit, oCur)}</td>
+                        <td class="cell-nowrap"><span class="badge badge-${o.status === 'paid' ? 'success' : (o.status === 'partial' ? 'warning' : 'danger')}">${o.status}</span></td>
+                        <td style="text-align: end;" class="cell-nowrap">
+                          <div class="table-actions">
+                            <button class="btn-action-icon action-primary" onclick="App.openInvoiceDashboard(${o.id})" title="${t('viewDashboard')}" aria-label="${t('viewDashboard')}">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                                <line x1="18" y1="20" x2="18" y2="10"></line>
+                                <line x1="12" y1="20" x2="12" y2="4"></line>
+                                <line x1="6" y1="20" x2="6" y2="14"></line>
+                              </svg>
+                            </button>
+                            <button class="btn-action-icon" onclick="App.previewInvoice(${o.id})" title="${t('view')}" aria-label="${t('view')}">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                              </svg>
+                            </button>
+                            <button class="btn-action-icon" onclick="App.openEditInvoiceModal(${o.id})" title="${t('edit')}" aria-label="${t('edit')}">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                              </svg>
+                            </button>
+                            ${o.status !== 'paid' && o.status !== 'cancelled' ? `
+                              <button class="btn-action-icon action-pay" onclick="App.openPaymentModal(${o.id}, '${o.invoice_number}', ${o.balance_due}, '${oCur}')" title="${t('recordPayment')}" aria-label="${t('recordPayment')}">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                                  <rect x="2" y="5" width="20" height="14" rx="2"></rect>
+                                  <line x1="2" y1="10" x2="22" y2="10"></line>
+                                </svg>
+                              </button>
+                            ` : ""}
+                            <button class="btn-action-icon action-danger" onclick="App.deleteInvoice(${o.id})" title="${t('delete')}" aria-label="${t('delete')}">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                                <polyline points="3 6 5 6 21 6"></polyline>
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                              </svg>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    `;
+                  }).join("")}
               </tbody>
             </table>
           </div>
         </div>
       `;
 
-      // Render customer histogram
-      const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-      const canvas = document.getElementById("customer-hist-canvas");
-      const tooltip = document.getElementById("chart-tooltip");
-      MiniChartEngine.renderHistogram(canvas, histogram, {
+      // Draw Charts after DOM insertion
+      this.renderCustomerDetailCharts();
+      this.observeChartContainers();
+
+    } catch (e) {
+      console.error("Failed to render customer detail:", e);
+    }
+  },
+
+  renderCustomerDetailCharts() {
+    if (!this.currentCustomerData) return;
+    const { cust, stats, histogram, custCur } = this.currentCustomerData;
+    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+    const tooltip = document.getElementById("chart-tooltip");
+
+    // Render customer donut
+    const donutCanvas = document.getElementById("customer-donut-canvas");
+    if (donutCanvas && cust) {
+      const pieData = (cust.pie_chart || []).map(p => ({
+        label: currentLanguage === "ar" && p.label_ar ? p.label_ar : p.label,
+        value: p.value,
+        color: p.color
+      }));
+      MiniChartEngine.renderDonut(donutCanvas, pieData, {
+        isDark,
+        isLoss: stats ? stats.is_loss : false,
+        centerLabel: stats && stats.is_loss ? t("netLoss") : t("netProfit"),
+        centerValue: stats ? formatCurrency(stats.total_profit, custCur) : "",
+        onHover: (item, pct, x, y) => {
+          if (!tooltip) return;
+          tooltip.style.display = "block";
+          tooltip.style.left = `${x + 12}px`;
+          tooltip.style.top = `${y - 20}px`;
+          tooltip.innerHTML = `<strong>${item.label}</strong><br/>${formatCurrency(item.value, custCur)} (${pct}%)`;
+        },
+        onLeave: () => { if (tooltip) tooltip.style.display = "none"; }
+      });
+    }
+
+    // Render customer histogram
+    const histCanvas = document.getElementById("customer-hist-canvas");
+    if (histCanvas && histogram) {
+      MiniChartEngine.renderHistogram(histCanvas, histogram, {
         isDark,
         onHover: (d, x, y) => {
+          if (!tooltip) return;
           tooltip.style.display = "block";
           tooltip.style.left = `${x + 12}px`;
           tooltip.style.top = `${y - 20}px`;
           tooltip.innerHTML = `
             <strong>${d.month_label}</strong><br/>
-            ${t("totalRevenue")}: ${formatCurrency(d.revenue)}<br/>
-            ${t("netProfit")}: <span style="color: #10B981">${formatCurrency(d.profit)}</span>
+            ${t("totalRevenue")}: ${formatCurrency(d.revenue, custCur)}<br/>
+            ${d.profit < 0 ? t("netLoss") : t("netProfit")}: <span style="color: ${d.profit < 0 ? '#EF4444' : '#10B981'}">${formatCurrency(d.profit, custCur)}</span>
           `;
         },
-        onLeave: () => { tooltip.style.display = "none"; }
+        onLeave: () => { if (tooltip) tooltip.style.display = "none"; }
       });
-
-    } catch (e) {
-      console.error("Failed to render customer detail:", e);
     }
   },
 
@@ -1075,23 +1362,34 @@ const App = {
             <strong>${p.name}</strong>
             ${p.description ? `<span class="text-muted text-xs block">${p.description}</span>` : ""}
           </td>
-          <td class="text-muted font-mono">${p.sku || "-"}</td>
-          <td class="font-bold">${formatCurrency(p.unit_price)}</td>
-          <td class="text-muted">${formatCurrency(p.cost_price)}</td>
-          <td class="text-success font-semibold">${formatCurrency(p.margin_per_unit)}</td>
-          <td class="font-bold text-center">${p.stock_quantity}</td>
-          <td class="font-semibold">${formatCurrency(p.total_stock_value)}</td>
-          <td>${statusBadge}</td>
-          <td style="text-align: end; white-space: nowrap;">
-            <button class="btn-primary" style="height: 28px; padding: 0 8px; font-size: 11px; display: inline-flex;" onclick="App.openRestockModal(${p.id}, '${p.name.replace(/'/g, "\\'")}')">
-              ${t('restock')}
-            </button>
-            <button class="btn-secondary" style="height: 28px; padding: 0 8px; font-size: 11px; display: inline-flex;" onclick="App.openEditProductModal(${p.id})">
-              ${t('edit')}
-            </button>
-            <button class="btn-secondary text-danger" style="height: 28px; padding: 0 6px; font-size: 11px; display: inline-flex;" onclick="App.deleteProduct(${p.id})">
-              ✕
-            </button>
+          <td class="text-muted font-mono cell-nowrap">${p.sku || "-"}</td>
+          <td class="font-bold cell-nowrap cell-currency">${formatCurrency(p.unit_price)}</td>
+          <td class="text-muted cell-nowrap cell-currency">${formatCurrency(p.cost_price)}</td>
+          <td class="text-success font-semibold cell-nowrap cell-currency">${formatCurrency(p.margin_per_unit)}</td>
+          <td class="font-bold text-center cell-nowrap">${p.stock_quantity}</td>
+          <td class="font-semibold cell-nowrap cell-currency">${formatCurrency(p.total_stock_value)}</td>
+          <td class="cell-nowrap">${statusBadge}</td>
+          <td style="text-align: end;" class="cell-nowrap">
+            <div class="table-actions">
+              <button class="btn-action-icon action-primary" onclick="App.openRestockModal(${p.id}, '${p.name.replace(/'/g, "\\'")}')" title="${t('restock')}" aria-label="${t('restock')}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+              </button>
+              <button class="btn-action-icon" onclick="App.openEditProductModal(${p.id})" title="${t('edit')}" aria-label="${t('edit')}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+              </button>
+              <button class="btn-action-icon action-danger" onclick="App.deleteProduct(${p.id})" title="${t('delete')}" aria-label="${t('delete')}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+              </button>
+            </div>
           </td>
         </tr>
       `;
@@ -1137,6 +1435,7 @@ const App = {
       const data = await res.json();
       if (!data.success) return;
 
+      this.reportsData = data;
       const { summary, histogram } = data;
       const invRes = await fetch("/api/invoices");
       const invData = await invRes.json();
@@ -1177,17 +1476,48 @@ const App = {
                 <span>-${formatCurrency(summary.total_cost)}</span>
               </div>
               <div class="total-row" style="border-top: 1px solid var(--border-subtle); padding-top: 6px;">
-                <span class="font-bold text-success">${t("grossProfit")}</span>
-                <span class="font-bold text-success">${formatCurrency(summary.total_profit)}</span>
+                <span class="font-bold ${summary.is_loss ? 'text-danger' : 'text-success'}">${summary.is_loss ? t("netLoss") : t("grossProfit")}</span>
+                <span class="font-bold ${summary.is_loss ? 'text-danger' : 'text-success'}">${formatCurrency(summary.total_profit)}</span>
               </div>
               <div class="total-row text-muted">
                 <span>${t("taxesCollected")} (VAT)</span>
                 <span>+${formatCurrency(totalTaxes)}</span>
               </div>
               <div class="total-row grand-total" style="font-size: 18px;">
-                <span class="font-bold text-success">${t("netProfit")}</span>
-                <span class="font-bold text-success">${formatCurrency(summary.total_profit)}</span>
+                <span class="font-bold ${summary.is_loss ? 'text-danger' : 'text-success'}">${summary.is_loss ? t("netLoss") : t("netProfit")}</span>
+                <span class="font-bold ${summary.is_loss ? 'text-danger' : 'text-success'}">${formatCurrency(summary.total_profit)}</span>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Reports Charts Grid: Donut + Histogram -->
+        <div class="dashboard-grid-2">
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <span class="chart-card-title">${t("profitVsCost")}</span>
+            </div>
+            <div class="chart-canvas-wrapper">
+              <canvas id="report-donut-canvas"></canvas>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <span class="chart-card-title">${t("financialPerformance")}</span>
+              <div style="display: flex; gap: 12px; font-size: 11px;">
+                <span style="display: flex; align-items: center; gap: 4px;">
+                  <span style="width: 10px; height: 10px; background: #3B82F6; border-radius: 2px;"></span>
+                  ${t("totalRevenue")}
+                </span>
+                <span style="display: flex; align-items: center; gap: 4px;">
+                  <span style="width: 10px; height: 10px; background: #10B981; border-radius: 2px;"></span>
+                  ${t("netProfit")}
+                </span>
+              </div>
+            </div>
+            <div class="chart-canvas-wrapper">
+              <canvas id="report-hist-canvas"></canvas>
             </div>
           </div>
         </div>
@@ -1211,22 +1541,32 @@ const App = {
                 </tr>
               </thead>
               <tbody>
-                ${this.customers.map(c => `
+                ${this.customers.map(c => {
+                  const cur = c.preferred_currency || "EGP";
+                  return `
                   <tr>
-                    <td><strong>${c.name}</strong></td>
+                    <td>
+                      <a href="#" onclick="App.openCustomerDashboard(${c.id}); return false;" style="font-weight: 700; color: var(--primary); text-decoration: none;">
+                        <bdi class="customer-bdi">${c.name}</bdi>
+                      </a>
+                    </td>
                     <td>${c.total_orders}</td>
-                    <td class="font-bold">${formatCurrency(c.total_spent)}</td>
-                    <td class="text-muted">${formatCurrency(c.total_spent - c.total_profit)}</td>
-                    <td class="text-success font-bold">${formatCurrency(c.total_profit)}</td>
-                    <td>${c.total_spent > 0 ? ((c.total_profit / c.total_spent) * 100).toFixed(1) : 0}%</td>
-                    <td class="${c.total_unpaid > 0 ? 'text-danger font-semibold' : 'text-muted'}">${formatCurrency(c.total_unpaid)}</td>
+                    <td class="font-bold cell-nowrap cell-currency">${formatCurrency(c.total_spent, cur)}</td>
+                    <td class="text-muted cell-nowrap cell-currency">${formatCurrency(c.total_spent - c.total_profit, cur)}</td>
+                    <td class="${c.total_profit < 0 ? 'text-danger' : 'text-success'} font-bold cell-nowrap cell-currency">${formatCurrency(c.total_profit, cur)}</td>
+                    <td class="cell-nowrap">${c.total_spent > 0 ? ((c.total_profit / c.total_spent) * 100).toFixed(1) : 0}%</td>
+                    <td class="${c.total_unpaid > 0 ? 'text-danger font-semibold' : 'text-muted'} cell-nowrap cell-currency">${formatCurrency(c.total_unpaid, cur)}</td>
                   </tr>
-                `).join("")}
+                  `;
+                }).join("")}
               </tbody>
             </table>
           </div>
         </div>
       `;
+
+      this.renderReportsCharts();
+      this.observeChartContainers();
 
     } catch (e) {
       console.error("Reports render error:", e);
@@ -1284,14 +1624,28 @@ const App = {
             ${t("currencySetting")}
           </h3>
 
-          <div class="form-grid-2">
+          <div class="form-grid-3">
+            <div class="form-group">
+              <label class="form-label">${t("selectCurrency")}</label>
+              <select id="settings-currency-preset" class="form-select" onchange="App.onSettingsCurrencyPresetChange(this)">
+                ${APP_CURRENCIES.map(curr => {
+                  const sym = isAr ? (curr.symbol_ar || curr.symbol) : (curr.symbol_en || curr.symbol);
+                  const name = isAr ? curr.name_ar : curr.name_en;
+                  return `
+                    <option value="${curr.code}" data-symbol="${curr.symbol}" data-symbol-ar="${curr.symbol_ar || curr.symbol}" data-symbol-en="${curr.symbol_en || curr.symbol}" ${(s.currency || 'EGP') === curr.code ? 'selected' : ''}>
+                      ${curr.code} - ${name} (${sym})
+                    </option>
+                  `;
+                }).join("")}
+              </select>
+            </div>
             <div class="form-group">
               <label class="form-label">${t("currencyCode")}</label>
-              <input type="text" name="currency" class="form-input" value="${s.currency || 'SAR'}" />
+              <input type="text" id="settings-currency-code" name="currency" class="form-input" value="${s.currency || 'EGP'}" required />
             </div>
             <div class="form-group">
               <label class="form-label">${t("currencySymbol")}</label>
-              <input type="text" name="currency_symbol" class="form-input" value="${s.currency_symbol || 'ر.س'}" />
+              <input type="text" id="settings-currency-symbol" name="currency_symbol" class="form-input" value="${s.currency_symbol || (isAr ? 'ج.م' : 'EGP')}" required />
             </div>
           </div>
 
@@ -1318,6 +1672,18 @@ const App = {
         </form>
       </div>
     `;
+  },
+
+  onSettingsCurrencyPresetChange(selectEl) {
+    const opt = selectEl.options[selectEl.selectedIndex];
+    if (!opt) return;
+    const isAr = currentLanguage === "ar";
+    const code = selectEl.value;
+    const symbol = (isAr ? opt.getAttribute("data-symbol-ar") : opt.getAttribute("data-symbol-en")) || opt.getAttribute("data-symbol") || getCurrencySymbol(code, currentLanguage);
+    const codeInput = document.getElementById("settings-currency-code");
+    const symInput = document.getElementById("settings-currency-symbol");
+    if (codeInput) codeInput.value = code;
+    if (symInput) symInput.value = (symbol && symbol !== "undefined") ? symbol : code;
   },
 
   async saveSettings(e) {
@@ -1347,6 +1713,37 @@ const App = {
 
   // ========================== INVOICE MODALS & ACTIONS ==========================
 
+  populateCurrencySelect(selectEl, selectedCurrency = "EGP") {
+    if (!selectEl) return;
+    const isAr = currentLanguage === "ar";
+    selectEl.innerHTML = APP_CURRENCIES.map(c => {
+      const sym = isAr ? (c.symbol_ar || c.symbol) : (c.symbol_en || c.symbol);
+      const name = isAr ? c.name_ar : c.name_en;
+      return `
+        <option value="${c.code}" data-symbol="${c.symbol}" data-symbol-ar="${c.symbol_ar || c.symbol}" data-symbol-en="${c.symbol_en || c.symbol}" ${c.code === selectedCurrency ? 'selected' : ''}>
+          ${c.code} - ${name} (${sym})
+        </option>
+      `;
+    }).join("");
+  },
+
+  onInvoiceCustomerSelect(selectEl) {
+    const custId = parseInt(selectEl.value);
+    if (!custId) return;
+    const cust = this.customers.find(c => c.id === custId);
+    if (cust && cust.preferred_currency) {
+      const currSelect = document.getElementById("inv-currency-select");
+      if (currSelect) {
+        currSelect.value = cust.preferred_currency;
+        this.recalculateInvoiceTotals();
+      }
+    }
+  },
+
+  onInvoiceCurrencyChange() {
+    this.recalculateInvoiceTotals();
+  },
+
   openInvoiceModal(prefillCustomerId = null) {
     document.getElementById("inv-edit-id").value = "";
     document.getElementById("invoice-modal-title").textContent = t("newInvoice");
@@ -1355,6 +1752,11 @@ const App = {
     const select = document.getElementById("inv-customer-select");
     select.innerHTML = `<option value="">${t("selectCustomer")}</option>` +
       this.customers.map(c => `<option value="${c.id}" ${prefillCustomerId === c.id ? 'selected' : ''}>${c.name}</option>`).join("");
+
+    // Populate currency select with customer's preferred currency or settings default
+    const prefillCustomer = prefillCustomerId ? this.customers.find(c => c.id === prefillCustomerId) : null;
+    const initialCurrency = (prefillCustomer && prefillCustomer.preferred_currency) ? prefillCustomer.preferred_currency : (this.settings.currency || "EGP");
+    this.populateCurrencySelect(document.getElementById("inv-currency-select"), initialCurrency);
 
     // Generate fresh invoice number
     const year = new Date().getFullYear();
@@ -1393,6 +1795,9 @@ const App = {
       select.innerHTML = `<option value="">${t("selectCustomer")}</option>` +
         this.customers.map(c => `<option value="${c.id}" ${inv.customer_id === c.id ? 'selected' : ''}>${c.name}</option>`).join("");
 
+      // Populate currency select with invoice's currency
+      this.populateCurrencySelect(document.getElementById("inv-currency-select"), inv.currency || "EGP");
+
       document.getElementById("inv-number-input").value = inv.invoice_number;
       document.getElementById("inv-issue-date").value = inv.issue_date;
       document.getElementById("inv-due-date").value = inv.due_date;
@@ -1424,13 +1829,13 @@ const App = {
     const isInventoryMode = this.settings.inventory_mode === "true";
 
     let productDropdown = "";
-    if (isInventoryMode && this.products.length > 0) {
+    if (this.products.length > 0) {
       productDropdown = `
         <select class="form-select row-product-select" onchange="App.onItemProductSelected(this)" style="font-size: 12px; height: 30px; margin-bottom: 4px;">
           <option value="">${t("selectProduct")}</option>
           ${this.products.map(p => `
             <option value="${p.id}" data-price="${p.unit_price}" data-cost="${p.cost_price}" data-stock="${p.stock_quantity}" ${itemData && itemData.product_id === p.id ? 'selected' : ''}>
-              ${p.name} (${t("availableInStock")}: ${p.stock_quantity})
+              ${p.name} ${isInventoryMode ? `(${t("availableInStock")}: ${p.stock_quantity})` : `(${formatCurrency(p.unit_price)})`}
             </option>
           `).join("")}
         </select>
@@ -1523,9 +1928,18 @@ const App = {
     const total = taxable + taxAmt + shipping;
     const profit = taxable - costTotal;
 
-    document.getElementById("calc-subtotal").textContent = formatCurrency(subtotal);
-    document.getElementById("calc-total").textContent = formatCurrency(total);
-    document.getElementById("calc-profit").textContent = formatCurrency(profit);
+    const currSelect = document.getElementById("inv-currency-select");
+    let activeSymbol = null;
+    if (currSelect && currSelect.value) {
+      const opt = currSelect.options[currSelect.selectedIndex];
+      const isAr = currentLanguage === "ar";
+      const symFromAttr = opt ? (isAr ? opt.getAttribute("data-symbol-ar") : opt.getAttribute("data-symbol-en")) : null;
+      activeSymbol = (symFromAttr && symFromAttr !== "undefined") ? symFromAttr : getCurrencySymbol(currSelect.value, currentLanguage);
+    }
+
+    document.getElementById("calc-subtotal").textContent = formatCurrency(subtotal, activeSymbol);
+    document.getElementById("calc-total").textContent = formatCurrency(total, activeSymbol);
+    document.getElementById("calc-profit").textContent = formatCurrency(profit, activeSymbol);
   },
 
   async saveInvoice(e) {
@@ -1555,8 +1969,17 @@ const App = {
       return;
     }
 
+    const currSelect = document.getElementById("inv-currency-select");
+    const currency = currSelect && currSelect.value ? currSelect.value : (this.settings.currency || "EGP");
+    const opt = currSelect && currSelect.selectedIndex >= 0 ? currSelect.options[currSelect.selectedIndex] : null;
+    const isAr = currentLanguage === "ar";
+    const symFromOpt = opt ? (isAr ? opt.getAttribute("data-symbol-ar") : opt.getAttribute("data-symbol-en")) : null;
+    const currency_symbol = (symFromOpt && symFromOpt !== "undefined") ? symFromOpt : getCurrencySymbol(currency, currentLanguage);
+
     const payload = {
       customer_id: parseInt(customerId),
+      currency,
+      currency_symbol,
       invoice_number: document.getElementById("inv-number-input").value.trim(),
       issue_date: document.getElementById("inv-issue-date").value,
       due_date: document.getElementById("inv-due-date").value,
@@ -1623,9 +2046,264 @@ const App = {
     setTimeout(() => modal.classList.remove("print-active"), 1000);
   },
 
-  openPaymentModal(invoiceId, invoiceNumber, balanceDue) {
+  async openInvoiceDashboard(invoiceId) {
+    try {
+      const res = await fetch(`/api/invoices/${invoiceId}`);
+      const data = await res.json();
+      if (!data.success) {
+        this.showToast("Invoice not found");
+        return;
+      }
+
+      this.currentInvoiceDashboardData = data.invoice;
+      const inv = data.invoice;
+      const analytics = inv.analytics || {};
+      const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+      const isLoss = analytics.is_loss || (inv.net_profit || 0) < 0;
+
+      const cur = inv.currency_symbol || inv.currency;
+
+      // Update modal titles
+      const titleEl = document.getElementById("inv-dash-title");
+      if (titleEl) {
+        titleEl.textContent = `${t("invoiceDashboardTitle")} - ${inv.invoice_number}`;
+      }
+      const subEl = document.getElementById("inv-dash-subtitle");
+      if (subEl) {
+        subEl.innerHTML = `<bdi class="customer-bdi">${inv.customer_name}</bdi> • ${inv.issue_date}`;
+      }
+
+      const body = document.getElementById("invoice-dashboard-body");
+      if (!body) return;
+
+      const profitColorClass = isLoss ? "text-danger" : "text-success";
+      const profitCardAccent = isLoss ? "card-accent-loss" : "card-accent-profit";
+      const profitLabel = isLoss ? t("netLoss") : t("netProfit");
+
+      body.innerHTML = `
+        <!-- Top Metrics Grid -->
+        <div class="metrics-grid" style="margin-bottom: 20px;">
+          <div class="metric-card card-accent-primary">
+            <span class="metric-card-label">${t("totalRevenue")}</span>
+            <span class="metric-card-value">${formatCurrency(inv.total_amount, cur)}</span>
+            <span class="metric-card-sub">${t("subtotal")}: ${formatCurrency(inv.subtotal, cur)}</span>
+          </div>
+
+          <div class="metric-card">
+            <span class="metric-card-label">${t("costOfGoods")}</span>
+            <span class="metric-card-value">${formatCurrency(inv.cost_total, cur)}</span>
+            <span class="metric-card-sub">${(inv.items || []).length} ${t("actions")}</span>
+          </div>
+
+          <div class="metric-card ${profitCardAccent}">
+            <span class="metric-card-label">${profitLabel}</span>
+            <span class="metric-card-value ${profitColorClass}">${formatCurrency(inv.net_profit, cur)}</span>
+            <span class="metric-card-sub">${t("profitMargin")}: ${analytics.margin_pct || 0}%</span>
+          </div>
+
+          <div class="metric-card ${inv.balance_due > 0 ? 'card-accent-loss' : 'card-accent-profit'}">
+            <span class="metric-card-label">${t("balanceDue")}</span>
+            <span class="metric-card-value">${formatCurrency(inv.balance_due, cur)}</span>
+            <span class="metric-card-sub">${t("paidAmount")}: ${formatCurrency(inv.paid_amount, cur)}</span>
+          </div>
+        </div>
+
+        <!-- Charts Grid: Donut + Item Breakdown Bars -->
+        <div class="dashboard-grid-2">
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <span class="chart-card-title">${t("profitVsCostAndLoss")}</span>
+            </div>
+            <div class="chart-canvas-wrapper" style="height: 240px; position: relative;">
+              <canvas id="invoice-donut-canvas" data-canvas="inv-dash-donut-canvas" style="width: 100%; height: 100%;"></canvas>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <span class="chart-card-title">${t("itemProfitBreakdown")}</span>
+            </div>
+            <div class="chart-canvas-wrapper" style="height: 240px; position: relative;">
+              <canvas id="invoice-items-canvas" data-canvas="inv-dash-bars-canvas" style="width: 100%; height: 100%;"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Line Items Financial Table -->
+        <div class="table-card">
+          <div class="table-toolbar">
+            <h3 style="font-size: 14px; font-weight: 700;">${t("invoiceFinancialBreakdown")}</h3>
+          </div>
+          <div class="data-table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>${t("itemDescription")}</th>
+                  <th>${t("quantity")}</th>
+                  <th>${t("unitPrice")}</th>
+                  <th>${t("costPrice")}</th>
+                  <th>${t("lineTotal")}</th>
+                  <th>${t("lineProfit")}</th>
+                  <th>${t("profitMargin")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${(inv.items || []).map(it => {
+                  const itLoss = (it.profit || 0) < 0;
+                  return `
+                    <tr>
+                      <td class="font-semibold">${it.description}</td>
+                      <td>${it.quantity}</td>
+                      <td class="cell-nowrap cell-currency">${formatCurrency(it.unit_price, cur)}</td>
+                      <td class="text-muted cell-nowrap cell-currency">${formatCurrency(it.cost_price, cur)}</td>
+                      <td class="font-bold cell-nowrap cell-currency">${formatCurrency(it.total, cur)}</td>
+                      <td class="${itLoss ? 'text-danger' : 'text-success'} font-semibold cell-nowrap cell-currency">
+                        ${formatCurrency(it.profit, cur)}
+                      </td>
+                      <td>
+                        <span class="badge ${itLoss ? 'badge-danger' : 'badge-success'}">
+                          ${it.margin_pct || 0}%
+                        </span>
+                      </td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+
+      // Open Modal
+      document.getElementById("modal-invoice-dashboard").classList.add("active");
+
+      // Render Charts
+      this.renderInvoiceDashboardCharts();
+      this.observeChartContainers();
+
+    } catch (err) {
+      console.error("Open invoice dashboard error:", err);
+    }
+  },
+
+  renderInvoiceDashboardCharts() {
+    if (!this.currentInvoiceDashboardData) return;
+    const inv = this.currentInvoiceDashboardData;
+    const analytics = inv.analytics || {};
+    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+    const isLoss = analytics.is_loss || (inv.net_profit || 0) < 0;
+    const cur = inv.currency_symbol || inv.currency;
+    const tooltip = document.getElementById("chart-tooltip");
+
+    const donutCanvas = document.getElementById("invoice-donut-canvas") || document.getElementById("inv-dash-donut-canvas");
+    if (donutCanvas) {
+      const pieData = (analytics.pie_chart || []).map(p => ({
+        label: currentLanguage === "ar" && p.label_ar ? p.label_ar : p.label,
+        value: p.value,
+        color: p.color
+      }));
+
+      MiniChartEngine.renderDonut(donutCanvas, pieData, {
+        isDark,
+        isLoss,
+        centerLabel: isLoss ? t("netLoss") : t("netProfit"),
+        centerValue: formatCurrency(inv.net_profit, cur),
+        onHover: (item, pct, x, y) => {
+          if (!tooltip) return;
+          tooltip.style.display = "block";
+          tooltip.style.left = `${x + 12}px`;
+          tooltip.style.top = `${y - 20}px`;
+          tooltip.innerHTML = `<strong>${item.label}</strong><br/>${formatCurrency(item.value, cur)} (${pct}%)`;
+        },
+        onLeave: () => { if (tooltip) tooltip.style.display = "none"; }
+      });
+    }
+
+    const barsCanvas = document.getElementById("invoice-items-canvas") || document.getElementById("inv-dash-bars-canvas");
+    if (barsCanvas) {
+      MiniChartEngine.renderItemBars(barsCanvas, analytics.item_breakdown || [], {
+        isDark,
+        onHover: (item, x, y) => {
+          if (!tooltip) return;
+          tooltip.style.display = "block";
+          tooltip.style.left = `${x + 12}px`;
+          tooltip.style.top = `${y - 20}px`;
+          tooltip.innerHTML = `
+            <strong>${item.name}</strong><br/>
+            ${t("totalRevenue")}: ${formatCurrency(item.revenue, cur)}<br/>
+            ${item.is_loss ? t("netLoss") : t("netProfit")}: <span style="color: ${item.is_loss ? '#EF4444' : '#10B981'}">${formatCurrency(item.profit, cur)}</span> (${item.margin_pct}%)
+          `;
+        },
+        onLeave: () => { if (tooltip) tooltip.style.display = "none"; }
+      });
+    }
+  },
+
+  renderReportsCharts() {
+    if (!this.reportsData) return;
+    const { summary, histogram, pie_charts } = this.reportsData;
+    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+    const tooltip = document.getElementById("chart-tooltip");
+
+    const histCanvas = document.getElementById("report-hist-canvas");
+    if (histCanvas && histogram) {
+      MiniChartEngine.renderHistogram(histCanvas, histogram, {
+        isDark,
+        onHover: (d, x, y) => {
+          if (!tooltip) return;
+          tooltip.style.display = "block";
+          tooltip.style.left = `${x + 12}px`;
+          tooltip.style.top = `${y - 20}px`;
+          tooltip.innerHTML = `
+            <strong>${d.month_label}</strong><br/>
+            ${t("totalRevenue")}: ${formatCurrency(d.revenue)}<br/>
+            ${t("netProfit")}: <span style="color: ${d.profit < 0 ? '#EF4444' : '#10B981'}">${formatCurrency(d.profit)}</span><br/>
+            ${t("totalOrders")}: ${d.order_count}
+          `;
+        },
+        onLeave: () => { if (tooltip) tooltip.style.display = "none"; }
+      });
+    }
+
+    const donutCanvas = document.getElementById("report-donut-canvas");
+    if (donutCanvas && pie_charts && pie_charts.profit_cost) {
+      MiniChartEngine.renderDonut(donutCanvas, pie_charts.profit_cost, {
+        isDark,
+        isLoss: summary ? summary.is_loss : false,
+        centerLabel: summary && summary.is_loss ? t("netLoss") : t("profitMargin"),
+        centerValue: summary && summary.is_loss ? formatCurrency(summary.total_profit) : `${summary ? summary.margin_pct : 0}%`,
+        onHover: (item, pct, x, y) => {
+          if (!tooltip) return;
+          tooltip.style.display = "block";
+          tooltip.style.left = `${x + 12}px`;
+          tooltip.style.top = `${y - 20}px`;
+          tooltip.innerHTML = `
+            <strong>${currentLanguage === 'ar' ? (item.label_ar || item.label) : item.label}</strong><br/>
+            ${formatCurrency(item.value)} (${pct}%)
+          `;
+        },
+        onLeave: () => { if (tooltip) tooltip.style.display = "none"; }
+      });
+    }
+  },
+
+  previewCurrentInvoiceFromDashboard() {
+    if (!this.currentInvoiceDashboardData) return;
+    const invId = this.currentInvoiceDashboardData.id;
+    this.closeModals();
+    this.previewInvoice(invId);
+  },
+
+  editCurrentInvoiceFromDashboard() {
+    if (!this.currentInvoiceDashboardData) return;
+    const invId = this.currentInvoiceDashboardData.id;
+    this.closeModals();
+    this.openEditInvoiceModal(invId);
+  },
+
+  openPaymentModal(invoiceId, invoiceNumber, balanceDue, currencySymbol = null) {
     document.getElementById("pay-inv-id").value = invoiceId;
-    document.getElementById("pay-inv-label").textContent = `${invoiceNumber} • ${t("balanceDue")}: ${formatCurrency(balanceDue)}`;
+    document.getElementById("pay-inv-label").textContent = `${invoiceNumber} • ${t("balanceDue")}: ${formatCurrency(balanceDue, currencySymbol)}`;
     document.getElementById("pay-amount-input").value = balanceDue;
     document.getElementById("pay-amount-input").max = balanceDue;
     document.getElementById("modal-payment").classList.add("active");
@@ -1678,6 +2356,7 @@ const App = {
     document.getElementById("cust-email-input").value = "";
     document.getElementById("cust-address-input").value = "";
     document.getElementById("cust-notes-input").value = "";
+    this.populateCurrencySelect(document.getElementById("cust-currency-select"), this.settings.currency || "EGP");
     document.getElementById("modal-customer-form").classList.add("active");
   },
 
@@ -1695,6 +2374,7 @@ const App = {
       document.getElementById("cust-email-input").value = c.email || "";
       document.getElementById("cust-address-input").value = c.address || "";
       document.getElementById("cust-notes-input").value = c.notes || "";
+      this.populateCurrencySelect(document.getElementById("cust-currency-select"), c.preferred_currency || this.settings.currency || "EGP");
       document.getElementById("modal-customer-form").classList.add("active");
     } catch (e) {
       console.error("Edit customer error:", e);
@@ -1704,11 +2384,15 @@ const App = {
   async saveCustomer(e) {
     e.preventDefault();
     const editId = document.getElementById("cust-edit-id").value;
+    const currSelect = document.getElementById("cust-currency-select");
+    const preferred_currency = currSelect && currSelect.value ? currSelect.value : (this.settings.currency || "EGP");
+
     const payload = {
       name: document.getElementById("cust-name-input").value.trim(),
       phone: document.getElementById("cust-phone-input").value.trim(),
       email: document.getElementById("cust-email-input").value.trim(),
       address: document.getElementById("cust-address-input").value.trim(),
+      preferred_currency,
       notes: document.getElementById("cust-notes-input").value.trim()
     };
 

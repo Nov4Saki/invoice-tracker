@@ -6,10 +6,24 @@ Supports transactions, foreign keys, fast indexing, and automatic seed data.
 
 import sqlite3
 import os
+import sys
 import json
 from datetime import datetime, timedelta
 
-DB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+
+def get_base_dir():
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(sys.executable)
+        parent_dir = os.path.dirname(exe_dir)
+        parent_data_db = os.path.join(parent_dir, "data", "invoices.db")
+        local_data_db = os.path.join(exe_dir, "data", "invoices.db")
+        if not os.path.exists(local_data_db) and os.path.exists(parent_data_db):
+            return parent_dir
+        return exe_dir
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+DB_DIR = os.path.join(get_base_dir(), "data")
 DB_PATH = os.path.join(DB_DIR, "invoices.db")
 
 
@@ -21,8 +35,8 @@ def get_db_connection():
     return conn
 
 
-def init_db():
-    """Initializes the database schema and seeds initial data if empty."""
+def init_db(seed_sample=False):
+    """Initializes the database schema and default settings without dummy data."""
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -43,9 +57,16 @@ def init_db():
         phone TEXT,
         address TEXT,
         notes TEXT,
+        preferred_currency TEXT NOT NULL DEFAULT 'EGP',
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     """)
+
+    # Migration for customers table
+    try:
+        cursor.execute("ALTER TABLE customers ADD COLUMN preferred_currency TEXT NOT NULL DEFAULT 'EGP';")
+    except sqlite3.OperationalError:
+        pass
 
     # Products / Inventory table
     cursor.execute("""
@@ -71,6 +92,8 @@ def init_db():
         issue_date TEXT NOT NULL,
         due_date TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending', -- 'draft', 'pending', 'paid', 'partial', 'cancelled'
+        currency TEXT NOT NULL DEFAULT 'EGP',
+        currency_symbol TEXT NOT NULL DEFAULT 'ج.م',
         subtotal REAL NOT NULL DEFAULT 0.0,
         cost_total REAL NOT NULL DEFAULT 0.0,
         discount_amount REAL NOT NULL DEFAULT 0.0,
@@ -80,11 +103,28 @@ def init_db():
         total_amount REAL NOT NULL DEFAULT 0.0,
         paid_amount REAL NOT NULL DEFAULT 0.0,
         net_profit REAL NOT NULL DEFAULT 0.0,
+        stock_deducted INTEGER NOT NULL DEFAULT 0,
         notes TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE CASCADE
     );
     """)
+
+    # Migrations for existing databases
+    try:
+        cursor.execute("ALTER TABLE invoices ADD COLUMN stock_deducted INTEGER NOT NULL DEFAULT 0;")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE invoices ADD COLUMN currency TEXT NOT NULL DEFAULT 'EGP';")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE invoices ADD COLUMN currency_symbol TEXT NOT NULL DEFAULT 'ج.م';")
+    except sqlite3.OperationalError:
+        pass
 
     # Invoice line items
     cursor.execute("""
@@ -116,13 +156,13 @@ def init_db():
     # Set default settings if not exists
     default_settings = {
         "inventory_mode": "false",
-        "business_name": "Al-Amana Trading | شركة الأمانة للتجارة",
-        "business_email": "contact@alamana-trade.com",
-        "business_phone": "+966 50 123 4567",
-        "business_address": "King Fahd Road, Riyadh, Saudi Arabia",
-        "business_tax_id": "310123456700003",
-        "currency": "SAR",
-        "currency_symbol": "ر.س",
+        "business_name": "My Business | اسم المنشأة",
+        "business_email": "",
+        "business_phone": "",
+        "business_address": "Cairo, Egypt",
+        "business_tax_id": "",
+        "currency": "EGP",
+        "currency_symbol": "ج.م",
         "language": "ar",
         "theme": "dark"
     }
@@ -130,10 +170,15 @@ def init_db():
     for key, val in default_settings.items():
         cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, val))
 
-    # Check if we should seed sample data
-    cursor.execute("SELECT COUNT(*) as count FROM customers;")
-    if cursor.fetchone()["count"] == 0:
-        seed_sample_data(cursor)
+    # Migrate legacy SAR defaults in settings to EGP if present
+    cursor.execute("UPDATE settings SET value = 'EGP' WHERE key = 'currency' AND value = 'SAR';")
+    cursor.execute("UPDATE settings SET value = 'ج.م' WHERE key = 'currency_symbol' AND value = 'ر.س';")
+
+    # Check if sample data was explicitly requested (disabled by default for clean production)
+    if seed_sample:
+        cursor.execute("SELECT COUNT(*) as count FROM customers;")
+        if cursor.fetchone()["count"] == 0:
+            seed_sample_data(cursor)
 
     conn.commit()
     conn.close()
@@ -142,17 +187,17 @@ def init_db():
 def seed_sample_data(cursor):
     """Seed realistic initial data for immediate demonstration."""
     sample_customers = [
-        ("مؤسسة الأمل للمقاولات (Al-Amal Contracting)", "info@alamal.com", "+966 55 432 1098", "Riyadh, Olaya", "VIP Client - 30 days credit"),
-        ("شركة النور للتوزيع (Al-Noor Distribution)", "sales@alnoor.com", "+966 50 987 6543", "Jeddah, Al-Balad", "Regular wholesale buyer"),
-        ("مكتبة الشروق (Al-Shorouq Stationery)", "contact@alshorouq.com", "+966 56 112 2334", "Dammam, Corniche", "Retail partner"),
-        ("سارة أحمد المنصور (Sarah Al-Mansoor)", "sarah.m@gmail.com", "+966 54 887 7665", "Riyadh, Al-Nakheel", "Direct individual client"),
-        ("عمر خالد الحربي (Omar Al-Harbi)", "omar.harbi@outlook.com", "+966 53 334 4556", "Medina, Central", "New customer")
+        ("مؤسسة الأمل للمقاولات (Al-Amal Contracting)", "info@alamal.com", "+20 101 432 1098", "Cairo, Nasr City", "VIP Client - 30 days credit", "EGP"),
+        ("شركة النور للتوزيع (Al-Noor Distribution)", "sales@alnoor.com", "+966 50 987 6543", "Jeddah, Al-Balad", "Regular wholesale buyer", "SAR"),
+        ("مكتبة الشروق (Al-Shorouq Stationery)", "contact@alshorouq.com", "+20 102 112 2334", "Alexandria, Corniche", "Retail partner", "EGP"),
+        ("سارة أحمد المنصور (Sarah Al-Mansoor)", "sarah.m@gmail.com", "+1 415 887 7665", "Cairo, Maadi", "Direct individual client", "USD"),
+        ("عمر خالد الحربي (Omar Al-Harbi)", "omar.harbi@outlook.com", "+20 103 334 4556", "Giza, Dokki", "New customer", "EGP")
     ]
 
     customer_ids = []
     for c in sample_customers:
         cursor.execute(
-            "INSERT INTO customers (name, email, phone, address, notes) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO customers (name, email, phone, address, notes, preferred_currency) VALUES (?, ?, ?, ?, ?, ?)",
             c
         )
         customer_ids.append(cursor.lastrowid)
@@ -195,7 +240,7 @@ def seed_sample_data(cursor):
                 (product_ids[0], "حاسوب مكتبي ديل (Dell Desktop Core i7)", 2, 3200.0, 2400.0, 0),
                 (product_ids[1], "شاشة سامسونج 27 بوصة (Samsung 27 inch 4K)", 2, 1400.0, 950.0, 0)
             ],
-            100.0, 15.0, 50.0, 10500.0
+            100.0, 14.0, 50.0, 10500.0, "EGP", "ج.م"
         ),
         (
             "INV-2026-0002", customer_ids[1], dates[1], (now - timedelta(days=35)).strftime("%Y-%m-%d"), "paid",
@@ -203,7 +248,7 @@ def seed_sample_data(cursor):
                 (product_ids[2], "طابعة ليزر إتش بي (HP LaserJet Pro)", 3, 950.0, 680.0, 50.0),
                 (product_ids[4], "كابل شبكة كات 6 - 305 متر (Cat6 Cable Reel)", 5, 220.0, 130.0, 0)
             ],
-            0.0, 15.0, 0.0, 4485.0
+            0.0, 15.0, 0.0, 4485.0, "SAR", "ر.س"
         ),
         (
             "INV-2026-0003", customer_ids[2], dates[2], (now - timedelta(days=10)).strftime("%Y-%m-%d"), "partial",
@@ -211,14 +256,14 @@ def seed_sample_data(cursor):
                 (product_ids[5], "كرسي مكتب مريح (Ergonomic Office Chair)", 6, 550.0, 320.0, 100.0),
                 (product_ids[3], "راوتر سيسكو احترافي (Cisco Gigabit Router)", 1, 650.0, 420.0, 0)
             ],
-            50.0, 15.0, 80.0, 2500.0  # partial payment of 2500
+            50.0, 14.0, 80.0, 2500.0, "EGP", "ج.م"
         ),
         (
             "INV-2026-0004", customer_ids[3], dates[3], (now - timedelta(days=5)).strftime("%Y-%m-%d"), "paid",
             [
                 (product_ids[0], "حاسوب مكتبي ديل (Dell Desktop Core i7)", 1, 3200.0, 2400.0, 0)
             ],
-            0.0, 15.0, 0.0, 3680.0
+            0.0, 10.0, 0.0, 3520.0, "USD", "$"
         ),
         (
             "INV-2026-0005", customer_ids[0], dates[4], (now + timedelta(days=20)).strftime("%Y-%m-%d"), "pending",
@@ -226,7 +271,7 @@ def seed_sample_data(cursor):
                 (product_ids[3], "راوتر سيسكو احترافي (Cisco Gigabit Router)", 4, 650.0, 420.0, 0),
                 (product_ids[4], "كابل شبكة كات 6 - 305 متر (Cat6 Cable Reel)", 10, 220.0, 130.0, 50.0)
             ],
-            100.0, 15.0, 100.0, 0.0
+            100.0, 14.0, 100.0, 0.0, "EGP", "ج.م"
         ),
         (
             "INV-2026-0006", customer_ids[4], dates[5], (now + timedelta(days=12)).strftime("%Y-%m-%d"), "paid",
@@ -234,7 +279,7 @@ def seed_sample_data(cursor):
                 (product_ids[1], "شاشة سامسونج 27 بوصة (Samsung 27 inch 4K)", 1, 1400.0, 950.0, 0),
                 (product_ids[5], "كرسي مكتب مريح (Ergonomic Office Chair)", 2, 550.0, 320.0, 0)
             ],
-            0.0, 15.0, 0.0, 2875.0
+            0.0, 14.0, 0.0, 2850.0, "EGP", "ج.م"
         ),
         (
             "INV-2026-0007", customer_ids[1], dates[6], (now + timedelta(days=30)).strftime("%Y-%m-%d"), "pending",
@@ -242,19 +287,19 @@ def seed_sample_data(cursor):
                 (product_ids[0], "حاسوب مكتبي ديل (Dell Desktop Core i7)", 3, 3200.0, 2400.0, 200.0),
                 (product_ids[2], "طابعة ليزر إتش بي (HP LaserJet Pro)", 2, 950.0, 680.0, 0)
             ],
-            150.0, 15.0, 100.0, 0.0
+            150.0, 15.0, 100.0, 0.0, "SAR", "ر.س"
         ),
         (
             "INV-2026-0008", customer_ids[2], dates[7], (now + timedelta(days=45)).strftime("%Y-%m-%d"), "draft",
             [
                 (product_ids[5], "كرسي مكتب مريح (Ergonomic Office Chair)", 4, 550.0, 320.0, 0)
             ],
-            0.0, 15.0, 50.0, 0.0
+            0.0, 14.0, 50.0, 0.0, "EGP", "ج.م"
         )
     ]
 
     for inv in sample_invoices:
-        inv_num, cust_id, iss_date, due_date, status, items, discount, tax_rate, shipping, paid = inv
+        inv_num, cust_id, iss_date, due_date, status, items, discount, tax_rate, shipping, paid, currency, curr_sym = inv
         subtotal = 0.0
         cost_total = 0.0
 
@@ -279,11 +324,13 @@ def seed_sample_data(cursor):
         cursor.execute("""
             INSERT INTO invoices (
                 invoice_number, customer_id, issue_date, due_date, status,
+                currency, currency_symbol,
                 subtotal, cost_total, discount_amount, tax_rate, tax_amount,
                 shipping_fee, total_amount, paid_amount, net_profit, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             inv_num, cust_id, iss_date, due_date, status,
+            currency, curr_sym,
             subtotal, cost_total, discount, tax_rate, tax_amt,
             shipping, total_amt, paid, net_prof, "Thank you for your business / شكراً لتعاملكم معنا"
         ))

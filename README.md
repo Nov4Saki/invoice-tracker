@@ -59,8 +59,13 @@ A lightweight, zero-dependency desktop application for small businesses to track
 ## طريقة التشغيل | How to Run
 
 ### في نظام ويندوز (Windows):
-1. انقر نقراً مزدوجاً على الملف `run.bat` أو `run_silent.vbs`.
-2. أو من موجه الأوامر (PowerShell / Command Prompt):
+1. **التشغيل المباشر للملف التنفيذي (Standalone Executable):**
+   - قم بتشغيل الملف `dist/InvoiceTracker.exe` مباشرة بدون الحاجة لأي تثبيت أو بيئة بايثون!
+2. **التشغيل الصامت بدون نافذة موجه الأوامر:**
+   - انقر نقراً مزدوجاً على الملف `run_silent.vbs`.
+3. **التشغيل عبر السكربت:**
+   - انقر نقراً مزدوجاً على الملف `run.bat`.
+4. **أو من موجه الأوامر (PowerShell / Command Prompt):**
 ```powershell
 python main.py
 ```

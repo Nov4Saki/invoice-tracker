@@ -41,6 +41,8 @@ const translations = {
     totalRevenue: "إجمالي الإيرادات",
     totalCost: "إجمالي التكلفة",
     netProfit: "صافي الأرباح",
+    netLoss: "صافي الخسارة",
+    costOfGoods: "تكلفة البضاعة (COGS)",
     profitMargin: "هامش الربح",
     totalUnpaid: "المستحقات غير المحصلة",
     totalPaid: "المبالغ المحصلة",
@@ -49,9 +51,15 @@ const translations = {
     averageOrder: "متوسط قيمة الطلب",
     financialPerformance: "الأداء المالي الشهري (الإيرادات والأرباح)",
     profitVsCost: "توزيع الأرباح مقابل التكاليف",
+    profitVsCostAndLoss: "توزيع الأرباح والتكاليف والخسائر",
     topCustomers: "أعلى العملاء إيراداً",
     recentOrders: "أحدث الطلبات والفواتير",
     futureOrdersAlert: "طلبات مستقبلية مجدولة",
+    invoiceDashboard: "لوحة أرباح الفاتورة",
+    invoiceDashboardTitle: "تحليلات وأرباح الفاتورة",
+    itemProfitBreakdown: "تحليل ربحية أصناف الفاتورة",
+    viewDashboard: "لوحة الأرباح",
+    viewInvoiceSheet: "معاينة الفاتورة",
 
     // Invoice Statuses
     statusAll: "الكل",
@@ -163,6 +171,11 @@ const translations = {
     amountToPay: "مبلغ الدفعة",
     paymentSuccess: "تم تسجيل الدفعة بنجاح!",
 
+    currency: "العملة",
+    invoiceCurrency: "عملة الفاتورة",
+    preferredCurrency: "العملة المفضلة للعميل",
+    selectCurrency: "-- اختر العملة --",
+
     // Placeholders & Helpers
     optional: "(اختياري)",
     futureOrderHint: "يمكنك تحديد تاريخ مستقبلي للطلب وتعديله في أي وقت لاحقاً.",
@@ -207,6 +220,8 @@ const translations = {
     totalRevenue: "Total Revenue",
     totalCost: "Total Cost",
     netProfit: "Net Profit",
+    netLoss: "Net Loss",
+    costOfGoods: "Cost of Goods (COGS)",
     profitMargin: "Profit Margin",
     totalUnpaid: "Outstanding Receivables",
     totalPaid: "Collected Payments",
@@ -215,9 +230,15 @@ const translations = {
     averageOrder: "Avg Order Value",
     financialPerformance: "Monthly Financial Performance (Revenue & Profit)",
     profitVsCost: "Profit vs. Cost Breakdown",
+    profitVsCostAndLoss: "Profit, Cost & Loss Breakdown",
     topCustomers: "Top Customers by Revenue",
     recentOrders: "Recent Orders & Invoices",
     futureOrdersAlert: "Scheduled Future Orders",
+    invoiceDashboard: "Invoice Profit Dashboard",
+    invoiceDashboardTitle: "Invoice Financial Analytics & Profit",
+    itemProfitBreakdown: "Item Profitability Breakdown",
+    viewDashboard: "Dashboard",
+    viewInvoiceSheet: "View Invoice Sheet",
 
     // Invoice Statuses
     statusAll: "All",
@@ -329,6 +350,11 @@ const translations = {
     amountToPay: "Payment Amount",
     paymentSuccess: "Payment recorded successfully!",
 
+    currency: "Currency",
+    invoiceCurrency: "Invoice Currency",
+    preferredCurrency: "Preferred Currency",
+    selectCurrency: "-- Select Currency --",
+
     // Placeholders & Helpers
     optional: "(Optional)",
     futureOrderHint: "You can schedule a future date for this order and edit it anytime before fulfillment.",
@@ -336,6 +362,33 @@ const translations = {
     selectCustomer: "-- Select Customer --"
   }
 };
+
+const APP_CURRENCIES = [
+  { code: "EGP", symbol: "ج.م", symbol_ar: "ج.م", symbol_en: "EGP", name_ar: "جنيه مصري", name_en: "Egyptian Pound" },
+  { code: "SAR", symbol: "ر.س", symbol_ar: "ر.س", symbol_en: "SAR", name_ar: "ريال سعودي", name_en: "Saudi Riyal" },
+  { code: "USD", symbol: "$",   symbol_ar: "$",   symbol_en: "$",   name_ar: "دولار أمريكي", name_en: "US Dollar" },
+  { code: "EUR", symbol: "€",   symbol_ar: "€",   symbol_en: "€",   name_ar: "يورو",         name_en: "Euro" },
+  { code: "AED", symbol: "د.إ", symbol_ar: "د.إ", symbol_en: "AED", name_ar: "درهم إماراتي", name_en: "UAE Dirham" },
+  { code: "KWD", symbol: "د.ك", symbol_ar: "د.ك", symbol_en: "KWD", name_ar: "دينار كويتي", name_en: "Kuwaiti Dinar" },
+  { code: "QAR", symbol: "ر.ق", symbol_ar: "ر.ق", symbol_en: "QAR", name_ar: "ريال قطري",   name_en: "Qatari Riyal" },
+  { code: "GBP", symbol: "£",   symbol_ar: "£",   symbol_en: "£",   name_ar: "جنيه إسترليني", name_en: "British Pound" }
+];
+
+function getCurrencySymbol(codeOrSymbol, lang = currentLanguage) {
+  if (!codeOrSymbol || codeOrSymbol === "undefined" || codeOrSymbol === "null") {
+    return window.appCurrencySymbol || (lang === "ar" ? "ج.م" : "EGP");
+  }
+  const found = APP_CURRENCIES.find(c =>
+    c.code === codeOrSymbol ||
+    c.symbol === codeOrSymbol ||
+    c.symbol_ar === codeOrSymbol ||
+    c.symbol_en === codeOrSymbol
+  );
+  if (found) {
+    return lang === "ar" ? (found.symbol_ar || found.symbol) : (found.symbol_en || found.symbol);
+  }
+  return codeOrSymbol;
+}
 
 let currentLanguage = localStorage.getItem("app_language") || "ar";
 
@@ -375,13 +428,19 @@ function setLanguage(lang) {
   }
 }
 
-// Global currency formatting helper
-function formatCurrency(amount, symbol = null) {
-  const sym = symbol || window.appCurrencySymbol || (currentLanguage === "ar" ? "ر.س" : "SAR");
+// Global currency formatting helper with non-breaking space
+function formatCurrency(amount, symbolOrCode = null) {
+  let sym = symbolOrCode;
+  if (!sym || sym === "undefined" || sym === "null") {
+    sym = window.appCurrencySymbol || (currentLanguage === "ar" ? "ج.م" : "EGP");
+  } else {
+    sym = getCurrencySymbol(sym, currentLanguage);
+  }
   const num = Number(amount || 0);
   const formatted = num.toLocaleString(currentLanguage === "ar" ? "ar-SA" : "en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   });
-  return currentLanguage === "ar" ? `${formatted} ${sym}` : `${sym} ${formatted}`;
+  // Use non-breaking space \u00A0 so the symbol and number never break onto separate lines
+  return currentLanguage === "ar" ? `${formatted}\u00A0${sym}` : `${sym}\u00A0${formatted}`;
 }

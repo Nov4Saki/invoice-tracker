@@ -9,7 +9,7 @@ class InvoiceMaker {
    */
   static renderPreviewHtml(invoice, settings) {
     const isAr = currentLanguage === "ar";
-    const cur = settings.currency_symbol || (isAr ? "ر.س" : "SAR");
+    const cur = invoice.currency_symbol || invoice.currency || settings.currency_symbol || (isAr ? "ج.م" : "EGP");
 
     const statusBadgeClass = {
       paid: "badge-success",
@@ -78,7 +78,7 @@ class InvoiceMaker {
         <div class="inv-bill-to">
           <div class="bill-col">
             <span class="text-muted text-xs uppercase tracking-wide">${t("customer")}:</span>
-            <h4 class="font-bold text-base mt-1">${invoice.customer_name}</h4>
+            <h4 class="font-bold text-base mt-1"><bdi class="customer-bdi">${invoice.customer_name}</bdi></h4>
             ${invoice.customer_phone ? `<p class="text-xs text-muted">${invoice.customer_phone}</p>` : ""}
             ${invoice.customer_email ? `<p class="text-xs text-muted">${invoice.customer_email}</p>` : ""}
             ${invoice.customer_address ? `<p class="text-xs text-muted">${invoice.customer_address}</p>` : ""}
@@ -164,21 +164,41 @@ class InvoiceMaker {
    * Export the invoice as a crisp PNG image using pure Canvas 2D API.
    * Works offline with 0 dependencies.
    */
+  /**
+   * Export the invoice as a crisp PNG image using pure Canvas 2D API.
+   * Supports standard full A4-style invoice and authentic thermal receipt.
+   * Works offline with 0 dependencies.
+   */
   static downloadInvoiceImage(invoice, settings, compact = false) {
+    if (compact) {
+      InvoiceMaker.downloadThermalReceiptImage(invoice, settings);
+      return;
+    }
+
     const isAr = currentLanguage === "ar";
-    const cur = settings.currency_symbol || (isAr ? "ر.س" : "SAR");
+    const cur = invoice.currency_symbol || invoice.currency || settings.currency_symbol || (isAr ? "ج.م" : "EGP");
 
     const scale = 2; // Retina scale
-    const width = compact ? 580 : 800;
-    // Calculate required height dynamically
+    const width = 800;
     const itemCount = (invoice.items || []).length;
-    const height = compact ? (540 + itemCount * 36) : (750 + itemCount * 42);
+    const height = 750 + itemCount * 38;
 
     const canvas = document.createElement("canvas");
     canvas.width = width * scale;
     canvas.height = height * scale;
     const ctx = canvas.getContext("2d");
     ctx.scale(scale, scale);
+    ctx.direction = isAr ? "rtl" : "ltr";
+
+    const truncate = (text, maxW) => {
+      if (!text) return "";
+      if (ctx.measureText(text).width <= maxW) return text;
+      let s = text;
+      while (s.length > 0 && ctx.measureText(s + "...").width > maxW) {
+        s = s.slice(0, -1);
+      }
+      return s + "...";
+    };
 
     // Background
     ctx.fillStyle = "#FFFFFF";
@@ -201,7 +221,7 @@ class InvoiceMaker {
     ctx.font = "bold 20px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
     ctx.textAlign = isAr ? "right" : "left";
     const brandX = isAr ? (width - pad) : pad;
-    ctx.fillText(settings.business_name || "Invoice", brandX, y);
+    ctx.fillText(truncate(settings.business_name || "Invoice", 420), brandX, y);
 
     ctx.font = "bold 18px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
     ctx.textAlign = isAr ? "left" : "right";
@@ -221,7 +241,7 @@ class InvoiceMaker {
 
     y += 18;
     ctx.textAlign = isAr ? "right" : "left";
-    ctx.fillText(settings.business_address || "", brandX, y);
+    ctx.fillText(truncate(settings.business_address || "", 420), brandX, y);
 
     ctx.textAlign = isAr ? "left" : "right";
     ctx.fillText(`${t("dueDate")}: ${invoice.due_date}`, invNumX, y);
@@ -250,7 +270,7 @@ class InvoiceMaker {
 
     ctx.fillStyle = "#0F172A";
     ctx.font = "bold 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
-    ctx.fillText(invoice.customer_name, billX, y + 42);
+    ctx.fillText(truncate(invoice.customer_name, 350), billX, y + 42);
 
     if (invoice.customer_phone) {
       ctx.fillStyle = "#64748B";
@@ -307,7 +327,7 @@ class InvoiceMaker {
       if (!isAr) {
         ctx.textAlign = "left";
         ctx.fillText(String(idx + 1), pad + 12, y + 20);
-        ctx.fillText(item.description, pad + 40, y + 20);
+        ctx.fillText(truncate(item.description, 360), pad + 40, y + 20);
         ctx.textAlign = "center";
         ctx.fillText(String(item.quantity), width - pad - 230, y + 20);
         ctx.textAlign = "right";
@@ -318,7 +338,7 @@ class InvoiceMaker {
       } else {
         ctx.textAlign = "right";
         ctx.fillText(String(idx + 1), width - pad - 12, y + 20);
-        ctx.fillText(item.description, width - pad - 40, y + 20);
+        ctx.fillText(truncate(item.description, 360), width - pad - 40, y + 20);
         ctx.textAlign = "center";
         ctx.fillText(String(item.quantity), pad + 230, y + 20);
         ctx.textAlign = "left";
@@ -392,7 +412,197 @@ class InvoiceMaker {
 
     // Trigger download
     const link = document.createElement("a");
-    link.download = `Invoice-${invoice.invoice_number}${compact ? "-Receipt" : ""}.png`;
+    link.download = `Invoice-${invoice.invoice_number}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  }
+
+  /**
+   * Export an authentic high-contrast thermal receipt image (PNG).
+   */
+  static downloadThermalReceiptImage(invoice, settings) {
+    const isAr = currentLanguage === "ar";
+    const cur = invoice.currency_symbol || invoice.currency || settings.currency_symbol || (isAr ? "ج.م" : "EGP");
+
+    const scale = 2;
+    const width = 460;
+    const itemCount = (invoice.items || []).length;
+    const height = 480 + itemCount * 46;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(scale, scale);
+    ctx.direction = isAr ? "rtl" : "ltr";
+
+    // Pure White Receipt Paper Background
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.strokeStyle = "#CCCCCC";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(6, 6, width - 12, height - 12);
+
+    let y = 30;
+    const pad = 24;
+
+    const drawDashedLine = (currY) => {
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = "#888888";
+      ctx.beginPath();
+      ctx.moveTo(pad, currY);
+      ctx.lineTo(width - pad, currY);
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    // Header: Business Name & Info
+    ctx.fillStyle = "#000000";
+    ctx.font = "bold 16px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(settings.business_name || "RECEIPT", width / 2, y);
+
+    y += 18;
+    ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
+    ctx.fillStyle = "#333333";
+    if (settings.business_phone) {
+      ctx.fillText(settings.business_phone, width / 2, y);
+      y += 16;
+    }
+    if (settings.business_address) {
+      ctx.fillText(settings.business_address, width / 2, y);
+      y += 16;
+    }
+    if (settings.business_tax_id) {
+      ctx.fillText(`${t("taxId")}: ${settings.business_tax_id}`, width / 2, y);
+      y += 16;
+    }
+
+    y += 6;
+    drawDashedLine(y);
+    y += 18;
+
+    // Meta details: 2-column key/value
+    ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    const drawMetaRow = (leftText, rightText) => {
+      ctx.fillStyle = "#333333";
+      if (!isAr) {
+        ctx.textAlign = "left";
+        ctx.fillText(leftText, pad, y);
+        ctx.textAlign = "right";
+        ctx.fillText(rightText, width - pad, y);
+      } else {
+        ctx.textAlign = "right";
+        ctx.fillText(leftText, width - pad, y);
+        ctx.textAlign = "left";
+        ctx.fillText(rightText, pad, y);
+      }
+      y += 16;
+    };
+
+    drawMetaRow(t("invoiceNumber") + ":", invoice.invoice_number);
+    drawMetaRow(t("issueDate") + ":", invoice.issue_date);
+    drawMetaRow(t("customer") + ":", invoice.customer_name);
+    if (invoice.customer_phone) drawMetaRow(t("phone") + ":", invoice.customer_phone);
+
+    y += 4;
+    drawDashedLine(y);
+    y += 18;
+
+    // Line items
+    (invoice.items || []).forEach(item => {
+      ctx.fillStyle = "#000000";
+      ctx.font = "bold 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
+
+      // Item Name
+      if (!isAr) {
+        ctx.textAlign = "left";
+        ctx.fillText(item.description, pad, y);
+      } else {
+        ctx.textAlign = "right";
+        ctx.fillText(item.description, width - pad, y);
+      }
+      y += 16;
+
+      // Item Quantity x Price = Total
+      ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.fillStyle = "#444444";
+      const calcText = `${item.quantity} x ${formatCurrency(item.unit_price, cur)}`;
+      const totalText = formatCurrency(item.total, cur);
+
+      if (!isAr) {
+        ctx.textAlign = "left";
+        ctx.fillText(calcText, pad + 10, y);
+        ctx.textAlign = "right";
+        ctx.fillText(totalText, width - pad, y);
+      } else {
+        ctx.textAlign = "right";
+        ctx.fillText(calcText, width - pad - 10, y);
+        ctx.textAlign = "left";
+        ctx.fillText(totalText, pad, y);
+      }
+      y += 20;
+    });
+
+    drawDashedLine(y);
+    y += 18;
+
+    // Totals
+    const drawReceiptTotal = (label, val, isBold = false) => {
+      ctx.font = isBold ? "bold 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" : "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.fillStyle = "#000000";
+      if (!isAr) {
+        ctx.textAlign = "left";
+        ctx.fillText(label, pad, y);
+        ctx.textAlign = "right";
+        ctx.fillText(val, width - pad, y);
+      } else {
+        ctx.textAlign = "right";
+        ctx.fillText(label, width - pad, y);
+        ctx.textAlign = "left";
+        ctx.fillText(val, pad, y);
+      }
+      y += 18;
+    };
+
+    drawReceiptTotal(t("subtotal"), formatCurrency(invoice.subtotal, cur));
+    if (invoice.discount_amount > 0) drawReceiptTotal(t("discount"), `-${formatCurrency(invoice.discount_amount, cur)}`);
+    if (invoice.tax_amount > 0) drawReceiptTotal(`${t("taxAmount")} (${invoice.tax_rate}%)`, `+${formatCurrency(invoice.tax_amount, cur)}`);
+    if (invoice.shipping_fee > 0) drawReceiptTotal(t("shippingFee"), `+${formatCurrency(invoice.shipping_fee, cur)}`);
+
+    y += 4;
+    ctx.strokeStyle = "#000000";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(pad, y);
+    ctx.lineTo(width - pad, y);
+    ctx.stroke();
+    y += 16;
+
+    drawReceiptTotal(t("totalAmount"), formatCurrency(invoice.total_amount, cur), true);
+    drawReceiptTotal(t("paidAmount"), formatCurrency(invoice.paid_amount, cur));
+    if (invoice.balance_due > 0) {
+      drawReceiptTotal(t("balanceDue"), formatCurrency(invoice.balance_due, cur), true);
+    }
+
+    y += 12;
+    drawDashedLine(y);
+    y += 24;
+
+    // Thank you message
+    ctx.fillStyle = "#666666";
+    ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(
+      isAr ? "شكراً لزيارتكم! نسعد بخدمتكم دائماً" : "Thank you for shopping with us!",
+      width / 2,
+      y
+    );
+
+    const link = document.createElement("a");
+    link.download = `Receipt-${invoice.invoice_number}.png`;
     link.href = canvas.toDataURL("image/png");
     link.click();
   }
