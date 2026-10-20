@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Invoice Tracker & Financial Reports | نظام الفواتير والمحاسبة</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app-container">
+  <!-- Sidebar Navigation -->
+  <aside class="app-sidebar">
+    <div class="brand-section">
+      <div class="brand-logo-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="1" x2="12" y2="23"></line>
+          <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+        </svg>
+      </div>
+      <div class="brand-info">
+        <h1 data-i18n="appName">نظام الفواتير والمحاسبة</h1>
+        <span data-i18n="appSubtitle">إدارة الفواتير والطلبات</span>
+      </div>
+    </div>
+
+    <nav class="nav-menu">
+      <button class="nav-link active" data-view="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="7" height="9" rx="1"></rect>
+          <rect x="14" y="3" width="7" height="5" rx="1"></rect>
+          <rect x="14" y="12" width="7" height="9" rx="1"></rect>
+          <rect x="3" y="16" width="7" height="5" rx="1"></rect>
+        </svg>
+        <span data-i18n="navDashboard">لوحة التحكم المالية</span>
+      </button>
+
+      <button class="nav-link" data-view="invoices">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="16" y1="13" x2="8" y2="13"></line>
+          <line x1="16" y1="17" x2="8" y2="17"></line>
+          <polyline points="10 9 9 9 8 9"></polyline>
+        </svg>
+        <span data-i18n="navInvoices">الفواتير والطلبات</span>
+      </button>
+
+      <button class="nav-link" data-view="customers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+          <circle cx="9" cy="7" r="4"></circle>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+        </svg>
+        <span data-i18n="navCustomers">العملاء وسجل الطلبات</span>
+      </button>
+
+      <button class="nav-link" id="nav-inventory-btn" data-view="inventory" style="display: none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+          <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+          <line x1="12" y1="22.08" x2="12" y2="12"></line>
+        </svg>
+        <span data-i18n="navInventory">المخزون والمنتجات</span>
+      </button>
+
+      <button class="nav-link" data-view="reports">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="20" x2="18" y2="10"></line>
+          <line x1="12" y1="20" x2="12" y2="4"></line>
+          <line x1="6" y1="20" x2="6" y2="14"></line>
+        </svg>
+        <span data-i18n="navReports">التقارير المالية والأرباح</span>
+      </button>
+
+      <button class="nav-link" data-view="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        <span data-i18n="navSettings">الإعدادات</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-bottom">
+      <div class="sidebar-metric-box">
+        <span class="sidebar-metric-label" data-i18n="netProfit">صافي الأرباح</span>
+        <span class="sidebar-metric-value" id="sidebar-total-profit">0.00 ر.س</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Area -->
+  <main class="app-main">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-search-wrapper">
+        <div class="search-input-box">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" id="global-search-input" data-i18n-placeholder="searchPlaceholder" placeholder="بحث سريع (العميل، الهاتف، البريد، الفاتورة)..." autocomplete="off" />
+          <span class="kbd-shortcut">Ctrl+K</span>
+        </div>
+
+        <div id="search-results-dropdown" class="search-results-dropdown"></div>
+      </div>
+
+      <div class="header-actions">
+        <!-- Language Switcher -->
+        <button id="lang-toggle-btn" class="btn-pill-lang" title="Toggle Language">
+          <span id="lang-label">English</span>
+        </button>
+
+        <!-- Theme Switcher -->
+        <button id="theme-toggle-btn" class="btn-icon" title="Toggle Theme">
+          <svg id="theme-icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="5"></circle>
+            <line x1="12" y1="1" x2="12" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line>
+            <line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+          </svg>
+        </button>
+
+        <!-- Quick Create Order Button -->
+        <button id="btn-quick-new-invoice" class="btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          <span data-i18n="newInvoice">طلب / فاتورة جديدة</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Views Container -->
+    <div id="view-container" class="app-view-container">
+      <!-- Dynamic Views Rendered by app.js -->
+    </div>
+  </main>
+</div>
+
+<!-- ========================== MODALS ========================== -->
+
+<!-- Invoice Creation & Edit Modal -->
+<div id="modal-invoice-form" class="modal-overlay">
+  <div class="modal-window modal-wide">
+    <div class="modal-header">
+      <h3 id="invoice-modal-title" data-i18n="newInvoice">فاتورة / طلب جديد</h3>
+      <button class="btn-icon" onclick="App.closeModals()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+
+    <form id="form-invoice" onsubmit="App.saveInvoice(event)">
+      <input type="hidden" id="inv-edit-id" value="" />
+      <div class="modal-body">
+        <div class="form-grid-3">
+          <div class="form-group">
+            <label class="form-label" data-i18n="customer">العميل *</label>
+            <div style="display: flex; gap: 6px;">
+              <select id="inv-customer-select" class="form-select" required style="flex: 1;">
+                <option value="">-- اختر العميل --</option>
+              </select>
+              <button type="button" class="btn-secondary" onclick="App.openCustomerModal()" title="Add Customer">+</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" data-i18n="invoiceNumber">رقم الفاتورة</label>
+            <input type="text" id="inv-number-input" class="form-input" placeholder="INV-2026-0001" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" data-i18n="status">الحالة</label>
+            <select id="inv-status-select" class="form-select">
+              <option value="pending" data-i18n="statusPending">معلقة</option>
+              <option value="paid" data-i18n="statusPaid">مدفوعة</option>
+              <option value="partial" data-i18n="statusPartial">مدفوعة جزئياً</option>
+              <option value="draft" data-i18n="statusDraft">مسودة</option>
+              <option value="cancelled" data-i18n="statusCancelled">ملغاة</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" data-i18n="issueDate">تاريخ الإصدار *</label>
+            <input type="date" id="inv-issue-date" class="form-input" required />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" data-i18n="dueDate">تاريخ الاستحقاق (أو التسليم المستقبلي) *</label>
+            <input type="date" id="inv-due-date" class="form-input" required />
+          </div>
+        </div>
+
+        <!-- Inventory Warning Banner (if active) -->
+        <div id="inv-stock-warning" class="badge-danger" style="padding: 8px 12px; border-radius: 6px; display: none;">
+          <strong data-i18n="insufficientStockWarning">تحذير: الكمية المطلوبة غير متوفرة في المخزون!</strong>
+        </div>
+
+        <!-- Line Items -->
+        <div class="table-card" style="margin-top: 6px;">
+          <div style="padding: 10px 14px; background: var(--bg-surface-alt); display: flex; justify-content: space-between; align-items: center;">
+            <strong style="font-size: 13px;" data-i18n="itemDescription">بنود الطلب / الفاتورة</strong>
+            <button type="button" class="btn-secondary" onclick="App.addInvoiceItemRow()" style="height: 30px; font-size: 12px;" data-i18n="addItem">+ إضافة بند</button>
+          </div>
+          <div class="data-table-wrapper">
+            <table class="items-entry-table">
+              <thead>
+                <tr>
+                  <th style="width: 35%;">الصنف / الوصف</th>
+                  <th style="width: 12%; text-align: center;">الكمية</th>
+                  <th style="width: 18%; text-align: end;">سعر البيع</th>
+                  <th style="width: 18%; text-align: end;">سعر التكلفة</th>
+                  <th style="width: 12%; text-align: end;">خصم البند</th>
+                  <th style="width: 5%;"></th>
+                </tr>
+              </thead>
+              <tbody id="inv-items-body">
+                <!-- Rows appended dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Calculations & Extras -->
+        <div class="form-grid-2" style="margin-top: 8px;">
+          <div class="form-group">
+            <label class="form-label" data-i18n="notes">ملاحظات وشروط الدفع</label>
+            <textarea id="inv-notes" class="form-textarea" placeholder="شكراً لتعاملكم معنا..."></textarea>
+          </div>
+
+          <div style="background: var(--bg-surface-alt); padding: 14px; border-radius: 8px; display: flex; flex-direction: column; gap: 8px;">
+            <div class="total-row">
+              <span class="text-muted" data-i18n="subtotal">المجموع الفرعي:</span>
+              <span id="calc-subtotal" class="font-semibold">0.00</span>
+            </div>
+            <div class="total-row" style="align-items: center;">
+              <span class="text-muted" data-i18n="discount">الخصم الإضافي:</span>
+              <input type="number" step="0.01" min="0" id="inv-discount" class="form-input" style="width: 90px; height: 28px; text-align: end;" value="0" oninput="App.recalculateInvoiceTotals()" />
+            </div>
+            <div class="total-row" style="align-items: center;">
+              <span class="text-muted" data-i18n="taxRate">الضريبة (VAT %):</span>
+              <input type="number" step="0.5" min="0" id="inv-tax-rate" class="form-input" style="width: 90px; height: 28px; text-align: end;" value="15" oninput="App.recalculateInvoiceTotals()" />
+            </div>
+            <div class="total-row" style="align-items: center;">
+              <span class="text-muted" data-i18n="shippingFee">الشحن / التوصيل:</span>
+              <input type="number" step="0.01" min="0" id="inv-shipping" class="form-input" style="width: 90px; height: 28px; text-align: end;" value="0" oninput="App.recalculateInvoiceTotals()" />
+            </div>
+            <div class="total-row grand-total">
+              <strong data-i18n="totalAmount">الإجمالي النهائي:</strong>
+              <strong id="calc-total" style="font-size: 16px;">0.00</strong>
+            </div>
+            <div class="total-row" style="align-items: center;">
+              <span class="text-muted" data-i18n="paidAmount">المبلغ المدفوع:</span>
+              <input type="number" step="0.01" min="0" id="inv-paid" class="form-input" style="width: 90px; height: 28px; text-align: end;" value="0" oninput="App.recalculateInvoiceTotals()" />
+            </div>
+            <div class="total-row" style="border-top: 1px dashed var(--border-medium); padding-top: 6px;">
+              <span class="text-success font-semibold" data-i18n="netProfit">الربح المتوقع:</span>
+              <span id="calc-profit" class="text-success font-bold">0.00</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn-secondary" onclick="App.closeModals()" data-i18n="cancel">إلغاء</button>
+        <button type="submit" class="btn-primary" data-i18n="save">حفظ الفاتورة</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Invoice Preview & Export Modal -->
+<div id="modal-invoice-preview" class="modal-overlay">
+  <div class="modal-window modal-wide">
+    <div class="modal-header">
+      <h3 data-i18n="invoiceNumber">معاينة الفاتورة</h3>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <button class="btn-secondary" onclick="App.exportInvoiceImage(false)" data-i18n="downloadImage">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+            <polyline points="21 15 16 10 5 21"></polyline>
+          </svg>
+          تحميل صورة (PNG)
+        </button>
+        <button class="btn-secondary" onclick="App.exportInvoiceImage(true)" data-i18n="downloadReceipt">
+          إيصال حراري
+        </button>
+        <button class="btn-primary" onclick="App.printInvoice()" data-i18n="downloadPdf">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 6 2 18 2 18 9"></polyline>
+            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+            <rect x="6" y="14" width="12" height="8"></rect>
+          </svg>
+          طباعة / PDF
+        </button>
+        <button class="btn-icon" onclick="App.closeModals()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="modal-body" id="invoice-preview-container" style="background-color: var(--bg-surface-alt);">
+      <!-- Printable Sheet inserted here -->
+    </div>
+  </div>
+</div>
+
+<!-- Record Payment Modal -->
+<div id="modal-payment" class="modal-overlay">
+  <div class="modal-window" style="max-width: 420px;">
+    <div class="modal-header">
+      <h3 data-i18n="recordPayment">تسجيل دفعة</h3>
+      <button class="btn-icon" onclick="App.closeModals()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+    <form id="form-payment" onsubmit="App.submitPayment(event)">
+      <input type="hidden" id="pay-inv-id" value="" />
+      <div class="modal-body">
+        <p id="pay-inv-label" class="text-muted text-xs"></p>
+        <div class="form-group mt-2">
+          <label class="form-label" data-i18n="amountToPay">مبلغ الدفعة *</label>
+          <input type="number" step="0.01" min="0.01" id="pay-amount-input" class="form-input" required />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-secondary" onclick="App.closeModals()" data-i18n="cancel">إلغاء</button>
+        <button type="submit" class="btn-primary" data-i18n="save">تأكيد الدفع</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Customer Form Modal -->
+<div id="modal-customer-form" class="modal-overlay">
+  <div class="modal-window" style="max-width: 540px;">
+    <div class="modal-header">
+      <h3 id="customer-modal-title" data-i18n="newCustomer">إضافة عميل جديد</h3>
+      <button class="btn-icon" onclick="App.closeModals()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+    <form id="form-customer" onsubmit="App.saveCustomer(event)">
+      <input type="hidden" id="cust-edit-id" value="" />
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" data-i18n="customerName">اسم العميل *</label>
+          <input type="text" id="cust-name-input" class="form-input" required />
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" data-i18n="phone">رقم الهاتف</label>
+            <input type="tel" id="cust-phone-input" class="form-input" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="email">البريد الإلكتروني</label>
+            <input type="email" id="cust-email-input" class="form-input" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-i18n="address">العنوان</label>
+          <input type="text" id="cust-address-input" class="form-input" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-i18n="customerNotes">ملاحظات</label>
+          <textarea id="cust-notes-input" class="form-textarea"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-secondary" onclick="App.closeModals()" data-i18n="cancel">إلغاء</button>
+        <button type="submit" class="btn-primary" data-i18n="save">حفظ العميل</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Product Form Modal -->
+<div id="modal-product-form" class="modal-overlay">
+  <div class="modal-window" style="max-width: 540px;">
+    <div class="modal-header">
+      <h3 id="product-modal-title" data-i18n="newProduct">إضافة منتج للمخزون</h3>
+      <button class="btn-icon" onclick="App.closeModals()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+    <form id="form-product" onsubmit="App.saveProduct(event)">
+      <input type="hidden" id="prod-edit-id" value="" />
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" data-i18n="productName">اسم المنتج *</label>
+          <input type="text" id="prod-name-input" class="form-input" required />
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" data-i18n="sku">كود الصنف (SKU)</label>
+            <input type="text" id="prod-sku-input" class="form-input" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="stockQuantity">الكمية المتوفرة *</label>
+            <input type="number" id="prod-stock-input" class="form-input" min="0" value="0" required />
+          </div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label class="form-label" data-i18n="unitPrice">سعر البيع *</label>
+            <input type="number" step="0.01" min="0" id="prod-unit-price" class="form-input" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="costPrice">سعر التكلفة *</label>
+            <input type="number" step="0.01" min="0" id="prod-cost-price" class="form-input" required />
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-i18n="minAlert">حد التنبيه بنقص المخزون</label>
+          <input type="number" id="prod-min-alert" class="form-input" min="1" value="5" />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-secondary" onclick="App.closeModals()" data-i18n="cancel">إلغاء</button>
+        <button type="submit" class="btn-primary" data-i18n="save">حفظ المنتج</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Restock Modal -->
+<div id="modal-restock" class="modal-overlay">
+  <div class="modal-window" style="max-width: 400px;">
+    <div class="modal-header">
+      <h3 data-i18n="addStock">إضافة كمية للمخزون</h3>
+      <button class="btn-icon" onclick="App.closeModals()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+    <form id="form-restock" onsubmit="App.submitRestock(event)">
+      <input type="hidden" id="restock-prod-id" value="" />
+      <div class="modal-body">
+        <p id="restock-prod-name" class="font-semibold"></p>
+        <div class="form-group mt-2">
+          <label class="form-label" data-i18n="quantityToAdd">الكمية المراد إضافتها *</label>
+          <input type="number" id="restock-qty-input" class="form-input" min="1" value="10" required />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-secondary" onclick="App.closeModals()" data-i18n="cancel">إلغاء</button>
+        <button type="submit" class="btn-primary" data-i18n="save">تحديث المخزون</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Chart Tooltip Container -->
+<div id="chart-tooltip" class="chart-tooltip"></div>
+
+<!-- Toast Container -->
+<div id="toast-container" class="toast-container"></div>
+
+<!-- Application Scripts -->
+<script src="i18n.js"></script>
+<script src="charts.js"></script>
+<script src="invoice.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
